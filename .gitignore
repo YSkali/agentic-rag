@@ -1,0 +1,31 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ===== 密钥（绝对不要提交）=====
+.env
+
+# ===== 向量库数据 =====
+.chroma/
+*.db
+*.sqlite3
+
+# ===== 模型缓存 =====
+models/
+*.safetensors
+*.bin
+
+# ===== 原始数据（按需放开）=====
+data/
+
+# ===== IDE =====
+.vscode/
+.idea/
+
+# ===== 日志 =====
+*.log
