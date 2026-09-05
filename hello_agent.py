@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
+
 load_dotenv()  # 读取 .env 里的密钥和配置
 
 llm = ChatOpenAI(

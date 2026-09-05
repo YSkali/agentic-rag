@@ -17,7 +17,7 @@
 |---|---|---|
 | 主模型 = DeepSeek API | 大模型大/贵/更新快，API 便宜且质量高 | [app/llm.py](../app/llm.py) |
 | Embedding = 本地 BGE | 小/固定/可控，能学底层原理，省调用费 | [app/embeddings.py](../app/embeddings.py) |
-| 编排 = LangGraph | 显式状态图，能讲清控制流 | （后续） |
+| 编排 = LangGraph | 显式状态图，能讲清控制流 | [app/agent.py](../app/agent.py) |
 | 向量库 = Chroma | 嵌入式，无需 Docker | [app/vectorstore.py](../app/vectorstore.py) |
 
 **面试官问**：为什么主模型用 API，embedding 却本地跑？
@@ -102,11 +102,37 @@
 **面试官问**：检索和生成为什么分成两个函数？
 **答**：`search()` 检索、`answer()` 生成，解耦后可独立替换模型/向量库、独立测试。
 
+## 10. Agentic RAG：LangGraph 编排 agent.py
+
+**面试官问**：为什么从 rag.py 直线版升级成 LangGraph 图？
+**答**：直线 RAG 检索不相关也会硬着头皮答；LangGraph 用「条件边」让 agent 先自评检索质量，不够就改写问题、重新检索，形成自我纠错闭环。
+**代码**：[app/agent.py](../app/agent.py)
+
+**面试官问**：图里有环（retrieve→grade→rewrite→retrieve），为什么不会死循环？
+**答**：`MAX_ATTEMPTS` 兜底——`should_rewrite` 里「检索达标 或 次数用完」就强制走 generate，最多重试 2 次。
+
+**面试官问**：条件边怎么决定「下一步走哪个节点」？
+**答**：`should_rewrite` 只返回字符串；`add_conditional_edges` 的第三个参数 `{"generate": ..., "rewrite": ...}` 是映射表，把字符串翻译成节点名。
+
+**面试官问**：节点为什么返回 dict（部分字段）而不是完整 state？
+**答**：节点返回「部分更新」，LangGraph 只覆盖对应字段、其余保持不动——每个节点只改自己负责的部分。
 
 
 ---
 
-## 9. 踩坑记录
+## 11. 前端 Streamlit
+
+**面试官问**：为什么用 Streamlit 而不是自己写前端？
+**答**：纯 Python、几十行出网页，适合快速验证/演示（MVP）；生产高并发会换 FastAPI + 前端框架。这里目标是「演示能力」。
+**代码**：[streamlit_app.py](../streamlit_app.py)
+
+**面试官问**：前端展示了什么？为什么展示这些？
+**答**：答案 + 引用来源（RAG 卖点：可追溯）+ agent 尝试次数（自我纠错「看得见」）——让面试官一眼看到 Agentic 的核心价值。
+
+
+---
+
+## 12. 踩坑记录
 
 | 坑 | 现象 | 解法 |
 |---|---|---|
@@ -114,13 +140,16 @@
 | cmd `set` 尾空格 | 连不上 `hf-mirror.com `（带尾空格） | `set "VAR=值"` 加引号，或分两行 |
 | HuggingFace 下载慢/被墙 | 连接失败 | `HF_ENDPOINT=https://hf-mirror.com` |
 | Python 环境错 | 依赖装到 base(3.14) | 先 `conda activate agent_rag` |
+| 已缓存模型仍联网检查 | `WinError 10060` 连 huggingface.co 超时 | `.env` 加 `HF_HUB_OFFLINE=1` 离线加载 |
 
 
 
 ---
 
-## 10. 待补（后续开发继续记）
+## 13. 待补（后续开发继续记）
 
 - [ ] 检索精度 vs chunk_size 的关系（已观察到：大块合并多个话题）
-- [✔] rag.py：检索 + 生成拼接
-- [ ] 多轮记忆 / query 改写 / rerank / 工具调用 / 评测
+- [x] rag.py：检索 + 生成拼接
+- [x] LangGraph 自我纠错闭环
+- [x] Streamlit 前端
+- [ ] 多轮记忆 / rerank / 工具调用 / 评测（RAGAS）
