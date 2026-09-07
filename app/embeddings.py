@@ -5,9 +5,11 @@
 """
 from functools import lru_cache
 
-from sentence_transformers import SentenceTransformer
-
+# 必须先导入 config：它内部 load_dotenv() 会把 .env 里的 HF_HUB_OFFLINE 写进环境变量，
+# 而 sentence_transformers 导入时会立即读这个变量。顺序反了 HF_HUB_OFFLINE 就失效（离线加载变成联网超时）。
 from app.config import settings
+
+from sentence_transformers import SentenceTransformer
 
 
 @lru_cache(maxsize=1)
