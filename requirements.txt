@@ -2,7 +2,8 @@
 langgraph
 langchain
 langchain-openai
-langchain-community
+langchain-community<0.4.2   # 0.4.2 移除了 vertexai 模块，与 ragas 冲突
+ragas
 
 # ===== Embedding（本地 BGE）=====
 sentence-transformers

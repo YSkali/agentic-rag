@@ -140,7 +140,24 @@
 
 ---
 
-## 11. 前端 Streamlit
+## 11. 评测（RAGAS）
+
+**面试官问**：你怎么证明你的 RAG 真的有用？
+**答**：用 RAGAS 量化评测——让另一个 LLM（DeepSeek）当评委，对每个问题打三个分：忠实度 / 答案相关性 / 上下文相关性。
+**代码**：[scripts/evaluate.py](../scripts/evaluate.py) + [scripts/test_set.py](../scripts/test_set.py)
+
+**面试官问**：三个指标分别评什么？
+**答**：忠实度（Faithfulness）评「答案有没有瞎编」；答案相关性（AnswerRelevancy）评「有没有答非所问」；上下文相关性（ContextRelevance）评「检索到的上下文相不相关」。三者正好对应 RAG 的「检索→生成」两段。
+
+**面试官问**：实测结果如何？
+**答**：忠实度 1.0、上下文相关性 1.0（全满分），答案相关性平均约 0.77——说明防幻觉和检索都在正常工作。
+
+**面试官问**：单题答案相关性只有 0.47，是不是答案错了？
+**答**：不是。LLM 当评委本身有噪声——answer_relevancy 靠「用答案反推问题、再比相似度」打分，对「为什么…」类题容易误判。正确用法是看平均/趋势、用来做「改动前后对比」（如有 rerank vs 无 rerank），而不是看单题绝对值。
+
+---
+
+## 12. 前端 Streamlit
 
 **面试官问**：为什么用 Streamlit 而不是自己写前端？
 **答**：纯 Python、几十行出网页，适合快速验证/演示（MVP）；生产高并发会换 FastAPI + 前端框架。这里目标是「演示能力」。
@@ -157,7 +174,7 @@
 
 ---
 
-## 12. 踩坑记录
+## 13. 踩坑记录
 
 | 坑 | 现象 | 解法 |
 |---|---|---|
@@ -172,18 +189,22 @@
 | `HF_HUB_OFFLINE` 在 .env 里不生效 | 还是连 huggingface.co 超时（WinError 10060） | 导入顺序：`sentence_transformers` 导入时会立刻读该变量，必须让 `load_dotenv()`（import config）跑在它**前面** |
 | hf 下载大文件 401 | `CAS Client Error ... 401 Unauthorized ... xethub.hf.co` | 新版默认走 Xet 存储，国内被墙。加 `HF_HUB_DISABLE_XET=1` 禁用，走传统 HTTP |
 | 改了图但节点没执行 | stream 输出里少了该节点 | 没入边的节点是「死节点」，LangGraph 不报错但永不执行；改图要「加新边 + 删旧边」同时做 |
-| hf 下载大文件 401 | CAS Client Error ... xethub.hf.co | 新版默认走 Xet，国内被墙；加 HF_HUB_DISABLE_XET=1 禁用 |
+| ragas 装完 import 报错 | `No module named 'langchain_community.chat_models.vertexai'` | ragas 与新版 langchain-community 不兼容；降级 `pip install "langchain-community<0.4.2"` |
+| ragas 0.4 API 大改 | 旧教程代码跑不通（`evaluate()` 报错、指标找不到） | 指标移到 `ragas.metrics.collections`；用 `metric.score()` 而非 `evaluate()`；评委用 `llm_factory` + `AsyncOpenAI`；查版本用 `inspect.signature`，别照抄旧教程 |
 
 
 
 
 ---
 
-## 13. 待补（后续开发继续记）
+## 14. 待补（后续开发继续记）
 
 - [ ] 检索精度 vs chunk_size 的关系（已观察到：大块合并多个话题）
+- [ ] 评测的「改动前后对比」（有 rerank vs 无 rerank）
 - [x] rag.py：检索 + 生成拼接
 - [x] LangGraph 自我纠错闭环
 - [x] Streamlit 前端
 - [x] 多轮记忆（查询改写）
-- [ ] rerank / 工具调用 / 评测（RAGAS）
+- [x] 重排（rerank）
+- [x] 评测（RAGAS）
+- [ ] 工具调用（MCP）

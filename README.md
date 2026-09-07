@@ -21,11 +21,12 @@
 
 ```
 
-- **retrieve**：Chroma 语义检索 top-k 片段
+- **contextualize**：多轮记忆——把代词追问改写成独立问题（第一轮原样通过）
+- **retrieve**：Chroma 语义检索 top-k 片段（多召回 top-8）
+- **rerank**：cross-encoder 精排，把召回候选按相关性重排、只留 top-4
 - **grade**：LLM 自评「检索结果够不够回答」（Agent 的决策点）
 - **rewrite**：LLM 改写问题，更利于检索
 - **generate**：基于达标后的原文生成答案，防幻觉约束
-- **contextualize**：多轮记忆——把代词追问改写成独立问题（第一轮原样通过）
 
 ## 技术栈
 
@@ -100,10 +101,13 @@ Agentlearnopen/
 │   ├── embeddings.py       # 本地 BGE 向量化
 │   ├── splitter.py         # 文档切块
 │   ├── vectorstore.py      # Chroma 存储 + 检索
+│   ├── reranker.py         # cross-encoder 重排（bi-encoder 召回 + 精排）
 │   ├── rag.py              # 直线 RAG（检索 + 生成）
 │   └── agent.py            # Agentic RAG（LangGraph 自我纠错）
 ├── scripts/
-│   └── build_index.py      # 建索引流水线
+│   ├── build_index.py      # 建索引流水线
+│   ├── evaluate.py         # RAGAS 评测（LLM 当评委打分）
+│   └── test_set.py         # 评测测试集（问题 + 参考答案）
 ├── data/                   # 你的文档（gitignore）
 ├── docs/
 │   └── interview_notes.md  # 开发笔记 + 面试问答
@@ -117,7 +121,7 @@ Agentlearnopen/
 - [x] 直线 RAG（检索 + 生成 + 防幻觉）
 - [x] Agentic RAG（LangGraph 自我纠错闭环）
 - [x] Streamlit 前端
-- [×] 多轮对话记忆
-- [ ] 重排（rerank）
+- [x] 多轮对话记忆
+- [x] 重排（rerank）
+- [x] 评测（RAGAS）
 - [ ] 工具调用（MCP）
-- [ ] 评测（RAGAS）
