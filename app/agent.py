@@ -16,6 +16,8 @@ MAX_ATTEMPTS = 2
 class RAGState(TypedDict):
     """图的状态：所有节点共享"""
     question: str
+    chat_history: list[str]   
+    # 历史对话，格式 ["问：...\n答：...", ...]
     context: list[str]
     answer: str
     retrieval_ok: bool
@@ -46,7 +48,17 @@ REWRITE_TEMPLATE = """下面是一个可能检索不到相关资料的问题。�
 
 原问题：{question}"""
 
-#--------四个重要主要节点（“图”的操作员）函数-------------
+CONTEXTUALIZE_TEMPLATE = """根据下面的「对话历史」，把「追问」里的指代词（如「它」「这」「那」）替换成具体内容，改写成一句可以独立理解、独立检索的问题。
+如果「追问」里本来就没有指代词、也不依赖上文，就直接原样输出。
+只输出改写后的问题，不要任何解释。
+
+对话历史：
+{history}
+
+追问：{question}"""
+
+
+#--------5个重要主要节点（“图”的操作员）函数-------------
 
 #1，retrieve(state) —— 执行者（去向量库捞资料）
 def retrieve(state:RAGState)->dict:
@@ -81,6 +93,19 @@ def rewrite(state: RAGState) -> dict:
     result = get_llm().invoke(prompt)
     return {"question": result.content}
 
+#6，加个门卫（多轮记忆）
+def contextualize(state: RAGState) -> dict:
+    """第一轮无历史 → 原样返回；有历史 → 把代词追问改写成独立问题。"""
+    history = state.get("chat_history", [])
+    if not history:
+        return {"question": state["question"]}
+
+    prompt = CONTEXTUALIZE_TEMPLATE.format(
+        history="\n\n".join(history),
+        question=state["question"],
+    )
+    result = get_llm().invoke(prompt)
+    return {"question": result.content}
 
 
 #5，should_rewrite(state) —— 最终回答（路由决策）
@@ -102,7 +127,10 @@ def build_graph():
     g.add_node("generate", generate)
     g.add_node("rewrite", rewrite)
 
-    g.add_edge(START, "retrieve")
+    g.add_node("contextualize", contextualize)
+    g.add_edge(START, "contextualize")
+    g.add_edge("contextualize", "retrieve")
+
     g.add_edge("retrieve", "grade")
     # 条件边：grade 之后由 should_rewrite 决定走哪条
     g.add_conditional_edges("grade", should_rewrite, {"generate": "generate", "rewrite": "rewrite"})
@@ -117,16 +145,43 @@ graph = build_graph()
 
 
 #3，ask(question: str) -> dict —— 给用户的“启动按钮”
-def ask(question: str) -> dict:
-    """对外接口，对齐 rag.answer()，返回完整最终状态。"""
+#def ask(question: str) -> dict:
+#    """对外接口，对齐 rag.answer()，返回完整最终状态。"""
+#    return graph.invoke({
+#         "question": question,        # 用户问的问题
+#    "context": [],              # 初始资料为空
+#    "answer": "",               # 初始答案为空
+#    "retrieval_ok": False,      # 默认质检不通过
+#    "attempts": 0,              # 从第 0 次开始计数
+#    })
+#改写对外接口 ask()
+def ask(question: str, chat_history: list[str] | None = None) -> dict:
     return graph.invoke({
-         "question": question,        # 用户问的问题
-    "context": [],              # 初始资料为空
-    "answer": "",               # 初始答案为空
-    "retrieval_ok": False,      # 默认质检不通过
-    "attempts": 0,              # 从第 0 次开始计数
+        "question": question,
+        "chat_history": chat_history or [],
+        "context": [],
+        "answer": "",
+        "retrieval_ok": False,
+        "attempts": 0,
     })
 
+
+
+
+#if __name__ == "__main__":
+#    for step in graph.stream({"question": "什么是向量检索", "context": [], "answer": "", "retrieval_ok": False, "attempts": 0}):
+#        print(step)
+
 if __name__ == "__main__":
-    for step in graph.stream({"question": "什么是向量检索", "context": [], "answer": "", "retrieval_ok": False, "attempts": 0}):
-        print(step)
+    # 第一轮
+    r1 = ask("什么是向量检索")
+    print("Q1:", r1["question"], "| 尝试:", r1["attempts"])
+
+    # 第二轮：代词追问，带着上一轮历史
+    history = [f"问：什么是向量检索\n答：{r1['answer']}"]
+    for step in graph.stream({
+        "question": "那它有什么缺点呢？",
+        "chat_history": history,
+        "context": [], "answer": "", "retrieval_ok": False, "attempts": 0,
+    }):
+        print(step)   # 看 contextualize 节点输出的改写后问题
