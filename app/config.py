@@ -22,12 +22,16 @@ class Settings:
     # ---- 本地 Embedding（BGE）----
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
 
+     # ---- 重排（cross-encoder）----
+    RERANK_MODEL: str = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-base")
+
     # ---- 文档切块 ----
     CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "500"))
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
 
     # ---- 检索 ----
     TOP_K: int = int(os.getenv("TOP_K", "4"))
+    TOP_K_RECALL: int = int(os.getenv("TOP_K_RECALL", "8"))   # 召回多、精排少
 
     # ---- 向量库 ----
     CHROMA_DIR: str = os.getenv("CHROMA_DIR", ".chroma")

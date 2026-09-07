@@ -10,6 +10,12 @@ from langgraph.graph import StateGraph,START,END
 from app import vectorstore
 from app.llm import get_llm
 
+#接入新的导入
+from app import reranker
+from app.config import settings
+
+
+
 MAX_ATTEMPTS = 2
 #这种永远不改变的变量就用全部大写，方便一眼看出来
 
@@ -63,8 +69,14 @@ CONTEXTUALIZE_TEMPLATE = """根据下面的「对话历史」，把「追问」�
 #1，retrieve(state) —— 执行者（去向量库捞资料）
 def retrieve(state:RAGState)->dict:
     """检索：向量库查 top-k 相关文档块，更新 state"""
-    chunks = vectorstore.search(state["question"])
+#    chunks = vectorstore.search(state["question"])  重排修改
+    chunks = vectorstore.search(state["question"], k=settings.TOP_K_RECALL)
     return {"context": chunks, "attempts": state.get("attempts", 0) + 1}
+
+#7，节点名 rerank 是给图用的，真正干活的是 reranker.rerank()
+def rerank(state: RAGState) -> dict:
+    """重排：对召回的候选块精排，只留最相关的 top-k（向量召回多、精排少）。"""
+    return {"context": reranker.rerank(state["question"], state["context"])}
 
 
 #2，grade(state) —— 裁判员（LLM自我反思）
@@ -123,6 +135,8 @@ def build_graph():
     g = StateGraph(RAGState)
 
     g.add_node("retrieve", retrieve)
+    #插入build_graph 接线
+    g.add_node("rerank", rerank)
     g.add_node("grade", grade)
     g.add_node("generate", generate)
     g.add_node("rewrite", rewrite)
@@ -131,7 +145,9 @@ def build_graph():
     g.add_edge(START, "contextualize")
     g.add_edge("contextualize", "retrieve")
 
-    g.add_edge("retrieve", "grade")
+    g.add_edge("retrieve", "rerank")
+    g.add_edge("rerank", "grade")
+    #rewrite → retrieve 那条边不用动——改写后回到 retrieve，仍会走 retrieve → rerank → grade，循环照旧
     # 条件边：grade 之后由 should_rewrite 决定走哪条
     g.add_conditional_edges("grade", should_rewrite, {"generate": "generate", "rewrite": "rewrite"})
     g.add_edge("rewrite", "retrieve")   # 改写后回到检索 → 形成循环

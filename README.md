@@ -14,16 +14,18 @@
 ## 架构
 
 ```
-问题 ──► retrieve ──► grade ──(资料够/次数用完)──► generate ──► 答案 + 来源
-            ▲            │
-            │         (资料不够)
-            └────── rewrite
+问题 ──► contextualize ──► retrieve ──►rerank──► grade ──(资料够/次数用完)──► generate ──► 答案 + 来源
+                                   ▲            │
+                                   │         (资料不够)
+                                   └────── rewrite
+
 ```
 
 - **retrieve**：Chroma 语义检索 top-k 片段
 - **grade**：LLM 自评「检索结果够不够回答」（Agent 的决策点）
 - **rewrite**：LLM 改写问题，更利于检索
 - **generate**：基于达标后的原文生成答案，防幻觉约束
+- **contextualize**：多轮记忆——把代词追问改写成独立问题（第一轮原样通过）
 
 ## 技术栈
 
@@ -115,7 +117,7 @@ Agentlearnopen/
 - [x] 直线 RAG（检索 + 生成 + 防幻觉）
 - [x] Agentic RAG（LangGraph 自我纠错闭环）
 - [x] Streamlit 前端
-- [ ] 多轮对话记忆
+- [×] 多轮对话记忆
 - [ ] 重排（rerank）
 - [ ] 工具调用（MCP）
 - [ ] 评测（RAGAS）

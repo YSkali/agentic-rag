@@ -117,6 +117,26 @@
 **面试官问**：节点为什么返回 dict（部分字段）而不是完整 state？
 **答**：节点返回「部分更新」，LangGraph 只覆盖对应字段、其余保持不动——每个节点只改自己负责的部分。
 
+**面试官问**：多轮对话怎么记住上下文？
+**答**：两层记忆——前端 st.session_state 存消息列表（UI 层）；传给 agent 的 chat_history 进图状态（逻辑层）。agent 用它做「查询改写」，把「那它呢」改写成独立问题再检索。
+
+**面试官问**：为什么前端和 agent 的历史格式不一样？
+**答**：前端存标准的 {role, content}（方便渲染），agent 只要扁平字符串列表（拼进提示词）。两边各自用最顺手的格式，交界处做一次转换——接口隔离。
+
+**面试官问**：多轮对话里「那它呢」这种代词追问，怎么处理？
+**答**：向量检索无状态、不认识代词，不能拿原话去检索。图最前面加了一个 `contextualize` 节点：用对话历史把追问改写成「不含指代词的独立问题」再往下检索。这叫**查询改写 / standalone question**。
+**代码**：app/agent.py 的 `contextualize` + `CONTEXTUALIZE_TEMPLATE`
+
+**面试官问**：为什么「改写」放检索前，而不是生成时再结合历史？
+**答**：检索质量决定答案质量——拿「那它呢」去检索必然召回垃圾，生成再好也没用。所以要在源头把问题改写成可检索的形式，这是 RAG 多轮的标准做法。
+
+**面试官问**：为什么向量检索之外还要加 rerank（重排）？
+**答**：向量检索是 bi-encoder（双塔），query 和 doc 各自编码、没见过面，快但不准；rerank 是 cross-encoder（交叉编码），query 和 doc 拼一起喂模型，准但慢。所以「多召回（top-8）→ 精排（top-4）」，用速度换精度。
+**代码**：app/reranker.py + agent.py 的 rerank 节点
+
+**面试官问**：加了 rerank 效果变化大吗？
+**答**：实测某问题从「我不知道」变成正确回答——rerank 把含答案的块排到了 context 最前面，模型更容易找到答案。
+
 
 ---
 
@@ -128,6 +148,11 @@
 
 **面试官问**：前端展示了什么？为什么展示这些？
 **答**：答案 + 引用来源（RAG 卖点：可追溯）+ agent 尝试次数（自我纠错「看得见」）——让面试官一眼看到 Agentic 的核心价值。
+
+**面试官问**：为什么 Streamlit 会「失忆」？
+**答**：Streamlit 有一个反直觉的行为：每交互一次（点按钮/发消息），它就把整个脚本从上到下重跑一遍。所以你上一轮存进普通变量 history = [...] 的东西，下一次交互就没了——因为脚本重跑时变量被重新初始化。
+
+解法就是 st.session_state：这是 Streamlit 提供的一个「跨重跑存活」的字典。凡是需要记住的东西（对话历史），都塞进去。这也是 Streamlit 面试必考的一个点。
 
 
 ---
@@ -141,6 +166,14 @@
 | HuggingFace 下载慢/被墙 | 连接失败 | `HF_ENDPOINT=https://hf-mirror.com` |
 | Python 环境错 | 依赖装到 base(3.14) | 先 `conda activate agent_rag` |
 | 已缓存模型仍联网检查 | `WinError 10060` 连 huggingface.co 超时 | `.env` 加 `HF_HUB_OFFLINE=1` 离线加载 |
+| 新函数追加到文件末尾 | `NameError: name 'contextualize' is not defined` | Python 顺序执行：被调用的函数必须先定义，`build_graph()` 之前必须先有 `contextualize` |
+| 重复定义 `RAGState` | 图用旧 schema、`ask` 传新字段，两边不一致 | 一个类只定义一次，改字段就改原定义，别再写一个 |
+| Streamlit 用了缓存旧模块 | `TypeError: ask() got an unexpected keyword argument` | 改完代码重启 Streamlit（或删 `__pycache__`） |
+| `HF_HUB_OFFLINE` 在 .env 里不生效 | 还是连 huggingface.co 超时（WinError 10060） | 导入顺序：`sentence_transformers` 导入时会立刻读该变量，必须让 `load_dotenv()`（import config）跑在它**前面** |
+| hf 下载大文件 401 | `CAS Client Error ... 401 Unauthorized ... xethub.hf.co` | 新版默认走 Xet 存储，国内被墙。加 `HF_HUB_DISABLE_XET=1` 禁用，走传统 HTTP |
+| 改了图但节点没执行 | stream 输出里少了该节点 | 没入边的节点是「死节点」，LangGraph 不报错但永不执行；改图要「加新边 + 删旧边」同时做 |
+| hf 下载大文件 401 | CAS Client Error ... xethub.hf.co | 新版默认走 Xet，国内被墙；加 HF_HUB_DISABLE_XET=1 禁用 |
+
 
 
 
@@ -152,4 +185,5 @@
 - [x] rag.py：检索 + 生成拼接
 - [x] LangGraph 自我纠错闭环
 - [x] Streamlit 前端
-- [ ] 多轮记忆 / rerank / 工具调用 / 评测（RAGAS）
+- [x] 多轮记忆（查询改写）
+- [ ] rerank / 工具调用 / 评测（RAGAS）
