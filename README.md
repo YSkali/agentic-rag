@@ -9,6 +9,7 @@
 - 基于检索到的原文生成答案，**拒绝编造**（资料没有就答「我不知道」）
 - **自我纠错闭环**：`检索 → 自评 →（不够则）改写重试 → 生成`
 - 每个答案附带「引用来源」，可追溯
+- **RAGAS 评测 + A/B 对比**：LLM 当评委打分，同一测试集对比「有/无 rerank」
 - Streamlit 网页界面，开箱即用
 
 ## 架构
@@ -91,6 +92,12 @@ streamlit run streamlit_app.py
 
 浏览器自动打开 `localhost:8501`，输入问题即可（首次提问会加载本地模型，约 20-40 秒）。
 
+## 评测
+
+- 用 RAGAS 让 LLM 当评委，给每个回答打三个分：忠实度 / 答案相关性 / 上下文相关性（`scripts/evaluate.py`）
+- 支持 **A/B 对比**：同一测试集跑「有 rerank / 无 rerank」两张图，输出平均差值（`app/agent.py` 的 `build_graph(use_rerank)` 开关切换）
+- 实测：忠实度、上下文相关性均接近满分；**rerank 在干净小语料上收益≈0**（测试集太简单 + 指标不评排位），完整结论见 [docs/interview_notes.md](docs/interview_notes.md)
+
 ## 项目结构
 
 ```
@@ -106,7 +113,7 @@ Agentlearnopen/
 │   └── agent.py            # Agentic RAG（LangGraph 自我纠错）
 ├── scripts/
 │   ├── build_index.py      # 建索引流水线
-│   ├── evaluate.py         # RAGAS 评测（LLM 当评委打分）
+│   ├── evaluate.py         # RAGAS 评测 + rerank A/B 对比（有/无 rerank）
 │   └── test_set.py         # 评测测试集（问题 + 参考答案）
 ├── data/                   # 你的文档（gitignore）
 ├── docs/
@@ -124,4 +131,5 @@ Agentlearnopen/
 - [x] 多轮对话记忆
 - [x] 重排（rerank）
 - [x] 评测（RAGAS）
+- [x] rerank A/B 对比（有/无 rerank）
 - [ ] 工具调用（MCP）
