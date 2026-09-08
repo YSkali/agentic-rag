@@ -39,27 +39,65 @@ def main():
     context_relevance = ContextRelevance(llm=llm)
 
     # 4. 逐个问题：跑 RAG → 让评委打分
-    for item in TEST_SET:
-        result = ask(item["question"])
-        print(f"\n问题：{item['question']}")
-        print(f"答案：{result['answer']}")
+#    for item in TEST_SET:
+#        result = ask(item["question"])
+#        print(f"\n问题：{item['question']}")
+#        print(f"答案：{result['answer']}")
+#
+#        r1 = faithfulness.score(
+#            user_input=item["question"],
+#            response=result["answer"],
+#            retrieved_contexts=result["context"],
+#        )
+#        r2 = answer_relevancy.score(
+#            user_input=item["question"],
+#            response=result["answer"],
+#        )
+#        r3 = context_relevance.score(
+#            user_input=item["question"],
+#            retrieved_contexts=result["context"],
+#        )
+#        print(f"  faithfulness:      {r1.value}")
+#        print(f"  answer_relevancy:  {r2.value}")
+#        print(f"  context_relevance: {r3.value}")
+    #有 rerank / 无 rerank 各跑一遍，最后算平均对比
+    summary = {
+        "faithfulness": {"有rerank": [], "无rerank": []},
+        "answer_relevancy": {"有rerank": [], "无rerank": []},
+        "context_relevance": {"有rerank": [], "无rerank": []},
+    }
 
-        r1 = faithfulness.score(
-            user_input=item["question"],
-            response=result["answer"],
-            retrieved_contexts=result["context"],
-        )
-        r2 = answer_relevancy.score(
-            user_input=item["question"],
-            response=result["answer"],
-        )
-        r3 = context_relevance.score(
-            user_input=item["question"],
-            retrieved_contexts=result["context"],
-        )
-        print(f"  faithfulness:      {r1.value}")
-        print(f"  answer_relevancy:  {r2.value}")
-        print(f"  context_relevance: {r3.value}")
+    for item in TEST_SET:
+        print(f"\n问题：{item['question']}")
+        for use_rerank in (True, False):
+            label = "有rerank" if use_rerank else "无rerank"
+            result = ask(item["question"], use_rerank=use_rerank)
+
+            r1 = faithfulness.score(
+                user_input=item["question"],
+                response=result["answer"],
+                retrieved_contexts=result["context"],
+            )
+            r2 = answer_relevancy.score(
+                user_input=item["question"],
+                response=result["answer"],
+            )
+            r3 = context_relevance.score(
+                user_input=item["question"],
+                retrieved_contexts=result["context"],
+            )
+            print(f"  [{label}] 忠实度={r1.value:.3f}  答案相关={r2.value:.3f}  上下文相关={r3.value:.3f}")
+
+            summary["faithfulness"][label].append(r1.value)
+            summary["answer_relevancy"][label].append(r2.value)
+            summary["context_relevance"][label].append(r3.value)
+
+    print("\n===== 平均对比（有 rerank vs 无 rerank）=====")
+    for name, cols in summary.items():
+        on = sum(cols["有rerank"]) / len(cols["有rerank"])
+        off = sum(cols["无rerank"]) / len(cols["无rerank"])
+        print(f"{name:18s}  有rerank={on:.3f}  无rerank={off:.3f}  差={on - off:+.3f}")
+
 
 
 if __name__ == "__main__":

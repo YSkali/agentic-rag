@@ -67,11 +67,19 @@ CONTEXTUALIZE_TEMPLATE = """根据下面的「对话历史」，把「追问」�
 #--------5个重要主要节点（“图”的操作员）函数-------------
 
 #1，retrieve(state) —— 执行者（去向量库捞资料）
-def retrieve(state:RAGState)->dict:
-    """检索：向量库查 top-k 相关文档块，更新 state"""
-#    chunks = vectorstore.search(state["question"])  重排修改
-    chunks = vectorstore.search(state["question"], k=settings.TOP_K_RECALL)
-    return {"context": chunks, "attempts": state.get("attempts", 0) + 1}
+#def retrieve(state:RAGState)->dict:
+#    """检索：向量库查 top-k 相关文档块，更新 state"""
+##    chunks = vectorstore.search(state["question"])  重排修改
+#    chunks = vectorstore.search(state["question"], k=settings.TOP_K_RECALL)
+#    return {"context": chunks, "attempts": state.get("attempts", 0) + 1}
+# retrieve 改成「按参数生成」，因为有无 rerank 时检索的 k 不一样
+def make_retrieve(k: int):
+    """生成一个「召回 k 个」的检索节点。k 由有无 rerank 决定。"""
+    def retrieve(state: RAGState) -> dict:
+        chunks = vectorstore.search(state["question"], k=k)
+        return {"context": chunks, "attempts": state.get("attempts", 0) + 1}
+    return retrieve
+
 
 #7，节点名 rerank 是给图用的，真正干活的是 reranker.rerank()
 def rerank(state: RAGState) -> dict:
@@ -131,33 +139,66 @@ def should_rewrite(state: RAGState) -> str:
 
 #--------------组装图----------------------
 #1，build_graph() —— 流水线的总设计师
-def build_graph():
+#def build_graph():
+#    g = StateGraph(RAGState)
+#
+#    g.add_node("retrieve", retrieve)
+#    #插入build_graph 接线
+#    g.add_node("rerank", rerank)
+#    g.add_node("grade", grade)
+#    g.add_node("generate", generate)
+#    g.add_node("rewrite", rewrite)
+
+#    g.add_node("contextualize", contextualize)
+#    g.add_edge(START, "contextualize")
+#    g.add_edge("contextualize", "retrieve")
+
+#    g.add_edge("retrieve", "rerank")
+#    g.add_edge("rerank", "grade")
+#    #rewrite → retrieve 那条边不用动——改写后回到 retrieve，仍会走 retrieve → rerank → grade，循环照旧
+#    # 条件边：grade 之后由 should_rewrite 决定走哪条
+#    g.add_conditional_edges("grade", should_rewrite, {"generate": "generate", "rewrite": "rewrite"})
+#    g.add_edge("rewrite", "retrieve")   # 改写后回到检索 → 形成循环
+#    g.add_edge("generate", END)
+#
+#    return g.compile()
+#添加 rerank 节点，build_graph 改写如下：
+def build_graph(use_rerank: bool = True):
     g = StateGraph(RAGState)
 
-    g.add_node("retrieve", retrieve)
-    #插入build_graph 接线
-    g.add_node("rerank", rerank)
     g.add_node("grade", grade)
     g.add_node("generate", generate)
     g.add_node("rewrite", rewrite)
-
     g.add_node("contextualize", contextualize)
-    g.add_edge(START, "contextualize")
-    g.add_edge("contextualize", "retrieve")
 
-    g.add_edge("retrieve", "rerank")
-    g.add_edge("rerank", "grade")
-    #rewrite → retrieve 那条边不用动——改写后回到 retrieve，仍会走 retrieve → rerank → grade，循环照旧
-    # 条件边：grade 之后由 should_rewrite 决定走哪条
+    g.add_edge(START, "contextualize")
+
+    if use_rerank:
+        g.add_node("retrieve", make_retrieve(settings.TOP_K_RECALL))   # 召回 8
+        g.add_node("rerank", rerank)
+        g.add_edge("contextualize", "retrieve")
+        g.add_edge("retrieve", "rerank")
+        g.add_edge("rerank", "grade")
+    else:
+        g.add_node("retrieve", make_retrieve(settings.TOP_K))          # 直接取 4
+        g.add_edge("contextualize", "retrieve")
+        g.add_edge("retrieve", "grade")
+
     g.add_conditional_edges("grade", should_rewrite, {"generate": "generate", "rewrite": "rewrite"})
-    g.add_edge("rewrite", "retrieve")   # 改写后回到检索 → 形成循环
+    g.add_edge("rewrite", "retrieve")   # 改写后回到检索 → 两个版本都会回到 retrieve
     g.add_edge("generate", END)
 
     return g.compile()
 
+
+
+
 #2，graph = build_graph() —— 开工投产
-graph = build_graph()
+#graph = build_graph()
 #通过这个单例对象，只需要这一个编译好的图即可防止每次问答重复编译
+#添加 rerank 节点，graph 改写如下：
+graph = build_graph()                            # 默认：带 rerank（线上/命令行用）
+graph_no_rerank = build_graph(use_rerank=False)  # 对比用（评测 A/B）
 
 
 #3，ask(question: str) -> dict —— 给用户的“启动按钮”
@@ -171,8 +212,19 @@ graph = build_graph()
 #    "attempts": 0,              # 从第 0 次开始计数
 #    })
 #改写对外接口 ask()
-def ask(question: str, chat_history: list[str] | None = None) -> dict:
-    return graph.invoke({
+#def ask(question: str, chat_history: list[str] | None = None) -> dict:
+#    return graph.invoke({
+#        "question": question,
+#        "chat_history": chat_history or [],
+#        "context": [],
+#        "answer": "",
+#        "retrieval_ok": False,
+#        "attempts": 0,
+#    })
+#添加 rerank 节点，ask 改写如下：
+def ask(question: str, chat_history: list[str] | None = None, use_rerank: bool = True) -> dict:
+    g = graph if use_rerank else graph_no_rerank
+    return g.invoke({
         "question": question,
         "chat_history": chat_history or [],
         "context": [],
@@ -180,7 +232,6 @@ def ask(question: str, chat_history: list[str] | None = None) -> dict:
         "retrieval_ok": False,
         "attempts": 0,
     })
-
 
 
 

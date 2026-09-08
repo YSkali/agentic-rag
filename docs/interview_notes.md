@@ -137,6 +137,13 @@
 **面试官问**：加了 rerank 效果变化大吗？
 **答**：实测某问题从「我不知道」变成正确回答——rerank 把含答案的块排到了 context 最前面，模型更容易找到答案。
 
+**面试官问**：rerank 的 A/B 对比，代码上怎么在「有 rerank / 无 rerank」两张图之间切换？
+**答**：`build_graph(use_rerank)` 加开关参数，编译出两张图——`graph`（带 rerank）和 `graph_no_rerank`（不带），`ask()` 按 `use_rerank` 选。关键是把 `retrieve` 挪进 `if` 分支：两个版本检索的 k 不同——有 rerank 用 `make_retrieve(TOP_K_RECALL=8)`（多召回），无 rerank 用 `make_retrieve(TOP_K=4)`（直接取少），保证两边喂给生成的上下文块数一致，唯一变量就是「有没有精排」。有 rerank 时 `retrieve → rerank → grade`，无 rerank 时 `retrieve → grade` 直连。
+**代码**：app/agent.py 的 `build_graph` + `make_retrieve`
+
+**面试官问**：为什么 `contextualize → retrieve` 这条边也得跟着挪进 `if`？
+**答**：LangGraph 要求「先 add_node 再 add_edge」——`retrieve` 现在是分支里才 add 的，边留在 if 外面会在 add_node 之前引用它，直接 `NameError`。同理 `rewrite → retrieve` 不用动，因为两个分支里都有叫 `retrieve` 的节点，这条回环边对两张图都成立。
+
 
 ---
 
@@ -154,6 +161,12 @@
 
 **面试官问**：单题答案相关性只有 0.47，是不是答案错了？
 **答**：不是。LLM 当评委本身有噪声——answer_relevancy 靠「用答案反推问题、再比相似度」打分，对「为什么…」类题容易误判。正确用法是看平均/趋势、用来做「改动前后对比」（如有 rerank vs 无 rerank），而不是看单题绝对值。
+
+**面试官问**：你做 rerank 的 A/B 对比时指标全打平了，怎么解释？
+**答**：深挖后发现是语料只有 2 个块——任何问题召回都「全中」，rerank 没有可重排的候选，三个指标自然都饱和。这让我意识到「评测结论受数据规模限制」：要先扩语料到几十块、让检索真的变难，对比才有意义。评测的瓶颈常在数据，不在模型或指标。
+
+**面试官问**：扩语料到 18 块后，rerank 的 A/B 还是没差异（甚至略负），是不是 rerank 没用？
+**答**：这是合法的负结果，原因有三：① 测试集 5 道题都是「某文档小节的近义词标题」，bi-encoder 靠关键词就命中，向量 top-4 已含答案——而 rerank 只在「正确块被干扰项挤出 top-4、但还在 top-8」时才发挥价值，当前不存在这种情况；② `context_relevance` 只评「相关不相关」、不评「排位」，即使 rerank 改了顺序它也看不见（应换 `Context Precision`）；③ 负差 -0.02 远小于评委噪声（同一题多次打分能从 0.47 跳到 1.0）。结论：小而干净的语料上 rerank 收益趋近于零——这本身就是发现。要展示 rerank 的价值，需要「难题 + 评排位的指标」。
 
 ---
 
@@ -191,6 +204,8 @@
 | 改了图但节点没执行 | stream 输出里少了该节点 | 没入边的节点是「死节点」，LangGraph 不报错但永不执行；改图要「加新边 + 删旧边」同时做 |
 | ragas 装完 import 报错 | `No module named 'langchain_community.chat_models.vertexai'` | ragas 与新版 langchain-community 不兼容；降级 `pip install "langchain-community<0.4.2"` |
 | ragas 0.4 API 大改 | 旧教程代码跑不通（`evaluate()` 报错、指标找不到） | 指标移到 `ragas.metrics.collections`；用 `metric.score()` 而非 `evaluate()`；评委用 `llm_factory` + `AsyncOpenAI`；查版本用 `inspect.signature`，别照抄旧教程 |
+| 语料太小导致评测饱和 | rerank A/B 三指标全打平、`context_relevance` 恒 1.0 | 先扩语料到几十块再测；评测结论受数据规模限制，数据不足时任何指标都会饱和 |
+| 测试集太简单 + 指标不敏感排序 | 扩到 18 块后 A/B 仍打平，`context_relevance` 恒 1.0、负差 -0.02 | rerank 只在「正确块被挤到 top-8 却不在 top-4」时显价值；要造干扰题 + 换评排位的 `Context Precision` |
 
 
 
@@ -199,8 +214,9 @@
 
 ## 14. 待补（后续开发继续记）
 
-- [ ] 检索精度 vs chunk_size 的关系（已观察到：大块合并多个话题）
-- [ ] 评测的「改动前后对比」（有 rerank vs 无 rerank）
+- [ ] 检索精度 vs chunk_size 的关系（已扩语料到 9 篇；chunk=500 下无重复话题问题，待用难题进一步验证）
+- [x] 评测的「改动前后对比」——A/B 已跑出**负结果**：小而干净的语料上 rerank 收益≈0（原因见第 11 节）
+- [ ] 展示 rerank 价值：造「正确块被挤出 top-4」的干扰题 + 换评排位的 `Context Precision` 指标
 - [x] rag.py：检索 + 生成拼接
 - [x] LangGraph 自我纠错闭环
 - [x] Streamlit 前端
