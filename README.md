@@ -101,9 +101,9 @@ streamlit run streamlit_app.py
 
 ## 评测
 
-- 用 RAGAS 让 LLM 当评委，给每个回答打三个分：忠实度 / 答案相关性 / 上下文相关性（`scripts/evaluate.py`）
+- 用 RAGAS 让 LLM 当评委，给每个回答打三个分：忠实度 / 答案相关性 / 上下文精度（ContextPrecision，`scripts/evaluate.py`）
 - 支持 **A/B 对比**：同一测试集跑「有 rerank / 无 rerank」两张图，输出平均差值（`app/agent.py` 的 `build_graph(use_rerank)` 开关切换）
-- 实测：忠实度、上下文相关性均接近满分；**rerank 在干净小语料上收益≈0**（测试集太简单 + 指标不评排位），完整结论见 [docs/interview_notes.md](docs/interview_notes.md)
+- 实测：忠实度接近满分；**换用评排位的 ContextPrecision 后 rerank 的收益显现**——有 rerank 0.931 vs 无 rerank 0.819（+0.111）。之前「收益≈0」是因为旧指标 ContextRelevance 不评排位、测不到。完整结论见 [docs/interview_notes.md](docs/interview_notes.md)
 
 ## 项目结构
 
@@ -143,3 +143,4 @@ Agentlearnopen/
 - [x] 评测（RAGAS）
 - [x] rerank A/B 对比（有/无 rerank）
 - [x] 工具调用（MCP）
+- [x] ContextPrecision 评测 + 干扰题（证明 rerank 排序收益）

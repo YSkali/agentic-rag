@@ -1,7 +1,7 @@
 """评测脚本：用 RAGAS 给 Agentic RAG 打分。
 
 三个指标（对应 RAG 三段流水线）：
-- ContextRelevance（上下文相关性）：检索到的上下文是否相关 → 评「检索」
+- ContextPrecision（上下文精度）：检索到的上下文是否相关、且相关项是否排得靠前 → 评「检索」的排序质量
 - Faithfulness（忠实度）：答案是否忠于上下文、有没有瞎编 → 评「生成」的防幻觉
 - AnswerRelevancy（答案相关性）：答案是否答非所问 → 评「生成」的相关性
 
@@ -15,7 +15,7 @@ from openai import AsyncOpenAI
 
 from ragas.embeddings import HuggingFaceEmbeddings
 from ragas.llms import llm_factory
-from ragas.metrics.collections import AnswerRelevancy, ContextRelevance, Faithfulness
+from ragas.metrics.collections import AnswerRelevancy, ContextPrecision, Faithfulness
 
 from scripts.test_set import TEST_SET
 
@@ -33,38 +33,17 @@ def main():
     embeddings = HuggingFaceEmbeddings(model=settings.EMBEDDING_MODEL)
 
     # 3. 三个指标（ragas 0.4 的 collections 指标在构造时就绑定评委）
-    # 注意：这三个都是「无参考答案」指标，各自要的入参不一样，reference 暂时用不上
+    # 用 ContextPrecision 而非 ContextRelevance：前者对「相关项排第几」敏感（正好被 rerank 影响），
+    # 后者只看「相关不相关」、对排序无感——所以 rerank 的收益只有前者才测得到。
     faithfulness = Faithfulness(llm=llm)
     answer_relevancy = AnswerRelevancy(llm=llm, embeddings=embeddings)
-    context_relevance = ContextRelevance(llm=llm)
+    context_precision = ContextPrecision(llm=llm)
 
-    # 4. 逐个问题：跑 RAG → 让评委打分
-#    for item in TEST_SET:
-#        result = ask(item["question"])
-#        print(f"\n问题：{item['question']}")
-#        print(f"答案：{result['answer']}")
-#
-#        r1 = faithfulness.score(
-#            user_input=item["question"],
-#            response=result["answer"],
-#            retrieved_contexts=result["context"],
-#        )
-#        r2 = answer_relevancy.score(
-#            user_input=item["question"],
-#            response=result["answer"],
-#        )
-#        r3 = context_relevance.score(
-#            user_input=item["question"],
-#            retrieved_contexts=result["context"],
-#        )
-#        print(f"  faithfulness:      {r1.value}")
-#        print(f"  answer_relevancy:  {r2.value}")
-#        print(f"  context_relevance: {r3.value}")
-    #有 rerank / 无 rerank 各跑一遍，最后算平均对比
+    # 有 rerank / 无 rerank 各跑一遍，最后算平均对比
     summary = {
         "faithfulness": {"有rerank": [], "无rerank": []},
         "answer_relevancy": {"有rerank": [], "无rerank": []},
-        "context_relevance": {"有rerank": [], "无rerank": []},
+        "context_precision": {"有rerank": [], "无rerank": []},
     }
 
     for item in TEST_SET:
@@ -82,22 +61,22 @@ def main():
                 user_input=item["question"],
                 response=result["answer"],
             )
-            r3 = context_relevance.score(
+            r3 = context_precision.score(
                 user_input=item["question"],
+                reference=item["reference"],
                 retrieved_contexts=result["context"],
             )
-            print(f"  [{label}] 忠实度={r1.value:.3f}  答案相关={r2.value:.3f}  上下文相关={r3.value:.3f}")
+            print(f"  [{label}] 忠实度={r1.value:.3f}  答案相关={r2.value:.3f}  上下文精度={r3.value:.3f}")
 
             summary["faithfulness"][label].append(r1.value)
             summary["answer_relevancy"][label].append(r2.value)
-            summary["context_relevance"][label].append(r3.value)
+            summary["context_precision"][label].append(r3.value)
 
     print("\n===== 平均对比（有 rerank vs 无 rerank）=====")
     for name, cols in summary.items():
         on = sum(cols["有rerank"]) / len(cols["有rerank"])
         off = sum(cols["无rerank"]) / len(cols["无rerank"])
         print(f"{name:18s}  有rerank={on:.3f}  无rerank={off:.3f}  差={on - off:+.3f}")
-
 
 
 if __name__ == "__main__":

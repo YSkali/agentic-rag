@@ -168,6 +168,10 @@
 **面试官问**：扩语料到 18 块后，rerank 的 A/B 还是没差异（甚至略负），是不是 rerank 没用？
 **答**：这是合法的负结果，原因有三：① 测试集 5 道题都是「某文档小节的近义词标题」，bi-encoder 靠关键词就命中，向量 top-4 已含答案——而 rerank 只在「正确块被干扰项挤出 top-4、但还在 top-8」时才发挥价值，当前不存在这种情况；② `context_relevance` 只评「相关不相关」、不评「排位」，即使 rerank 改了顺序它也看不见（应换 `Context Precision`）；③ 负差 -0.02 远小于评委噪声（同一题多次打分能从 0.47 跳到 1.0）。结论：小而干净的语料上 rerank 收益趋近于零——这本身就是发现。要展示 rerank 的价值，需要「难题 + 评排位的指标」。
 
+**面试官问**：那 rerank 的价值最后是怎么展示出来的？
+**答**：按上面的思路补了两件事。① **换指标**：把 `ContextRelevance`（只看「相关不相关」）换成 `ContextPrecision`（看「相关项排第几」、对排序敏感，需传 `reference`）——这才是 rerank 能影响的维度。② **造干扰**：往语料加一篇「推荐系统的召回与精排」，它和 RAG 重排共用行话（召回/精排/打分/速度换精度），让 bi-encoder 只看词面时把推荐系统的块排第一、把 RAG 重排笔记挤下去。重跑 A/B：ContextPrecision 从无 rerank 的 0.819 升到有 rerank 的 0.931（**+0.111**）。其中「RAG 相比微调」+0.500（只靠换指标就暴露出来的收益）、干扰题「检索里为什么先召回再精排」+0.167、「什么是 RAG」+0.167；两题 -0.083 落在评委噪声内。这证明 rerank 的价值一直存在，只是之前「不评排位」的指标测不到。
+**代码**：[scripts/evaluate.py](../scripts/evaluate.py)（换 ContextPrecision）+ [scripts/test_set.py](../scripts/test_set.py)（干扰题）+ 本地语料 `data/recommender_ranking_notes.txt`（干扰文档，data/ 已 gitignore，不入库）
+
 ---
 
 ## 12. 前端 Streamlit
@@ -221,7 +225,7 @@
 
 - [ ] 检索精度 vs chunk_size 的关系（已扩语料到 9 篇；chunk=500 下无重复话题问题，待用难题进一步验证）
 - [x] 评测的「改动前后对比」——A/B 已跑出**负结果**：小而干净的语料上 rerank 收益≈0（原因见第 11 节）
-- [ ] 展示 rerank 价值：造「正确块被挤出 top-4」的干扰题 + 换评排位的 `Context Precision` 指标
+- [x] 展示 rerank 价值：换评排位的 `ContextPrecision` 指标 + 造干扰文档（推荐系统召回精排）——实测有 rerank 0.931 vs 无 rerank 0.819（+0.111），见第 11 节
 - [x] rag.py：检索 + 生成拼接
 - [x] LangGraph 自我纠错闭环
 - [x] Streamlit 前端
