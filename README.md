@@ -10,24 +10,31 @@
 - **自我纠错闭环**：`检索 → 自评 →（不够则）改写重试 → 生成`
 - 每个答案附带「引用来源」，可追溯
 - **RAGAS 评测 + A/B 对比**：LLM 当评委打分，同一测试集对比「有/无 rerank」
+- **工具调用（MCP）**：知识库查不到就调外部工具——计算器（原生 function calling）+ 查当前时间（MCP 独立 server 按协议提供）
 - Streamlit 网页界面，开箱即用
 
 ## 架构
 
 ```
-问题 ──► contextualize ──► retrieve ──►rerank──► grade ──(资料够/次数用完)──► generate ──► 答案 + 来源
-                                   ▲            │
-                                   │         (资料不够)
-                                   └────── rewrite
+问题 ──► contextualize ──► call_tools ──(要工具)──► generate ──► 答案
+                                    │
+                                 (要检索)
+                                    │
+                                    ▼
+                                retrieve ──►rerank──► grade ──(资料够/次数用完)──► generate ──► 答案 + 来源
+                                                     ▲            │
+                                                     │         (资料不够)
+                                                     └────── rewrite
 
 ```
 
 - **contextualize**：多轮记忆——把代词追问改写成独立问题（第一轮原样通过）
+- **call_tools**：用 `bind_tools` 挂上工具，让 LLM 自行判断「要不要调工具」（工具 or 检索的分叉点）
 - **retrieve**：Chroma 语义检索 top-k 片段（多召回 top-8）
 - **rerank**：cross-encoder 精排，把召回候选按相关性重排、只留 top-4
 - **grade**：LLM 自评「检索结果够不够回答」（Agent 的决策点）
 - **rewrite**：LLM 改写问题，更利于检索
-- **generate**：基于达标后的原文生成答案，防幻觉约束
+- **generate**：基于达标后的原文（或工具结果）生成答案，防幻觉约束
 
 ## 技术栈
 
@@ -110,7 +117,10 @@ Agentlearnopen/
 │   ├── vectorstore.py      # Chroma 存储 + 检索
 │   ├── reranker.py         # cross-encoder 重排（bi-encoder 召回 + 精排）
 │   ├── rag.py              # 直线 RAG（检索 + 生成）
-│   └── agent.py            # Agentic RAG（LangGraph 自我纠错）
+│   ├── tools.py            # 原生工具（计算器，ast 安全求值）
+│   ├── mcp_server.py       # MCP server（独立进程，按协议暴露「查时间」工具）
+│   ├── mcp_client.py       # MCP 客户端（发现并调用 server 工具）
+│   └── agent.py            # Agentic RAG（LangGraph 自我纠错 + 工具调用）
 ├── scripts/
 │   ├── build_index.py      # 建索引流水线
 │   ├── evaluate.py         # RAGAS 评测 + rerank A/B 对比（有/无 rerank）
@@ -132,4 +142,4 @@ Agentlearnopen/
 - [x] 重排（rerank）
 - [x] 评测（RAGAS）
 - [x] rerank A/B 对比（有/无 rerank）
-- [ ] 工具调用（MCP）
+- [x] 工具调用（MCP）

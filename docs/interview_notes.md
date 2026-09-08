@@ -206,6 +206,11 @@
 | ragas 0.4 API 大改 | 旧教程代码跑不通（`evaluate()` 报错、指标找不到） | 指标移到 `ragas.metrics.collections`；用 `metric.score()` 而非 `evaluate()`；评委用 `llm_factory` + `AsyncOpenAI`；查版本用 `inspect.signature`，别照抄旧教程 |
 | 语料太小导致评测饱和 | rerank A/B 三指标全打平、`context_relevance` 恒 1.0 | 先扩语料到几十块再测；评测结论受数据规模限制，数据不足时任何指标都会饱和 |
 | 测试集太简单 + 指标不敏感排序 | 扩到 18 块后 A/B 仍打平，`context_relevance` 恒 1.0、负差 -0.02 | rerank 只在「正确块被挤到 top-8 却不在 top-4」时显价值；要造干扰题 + 换评排位的 `Context Precision` |
+| MCP server 子进程起不来 | 客户端能 `import mcp`，但拉子进程报 `ModuleNotFoundError: No module named 'mcp'` | 客户端用 `sys.executable` 拉子进程，别写裸 `python`（PATH 可能指到没装 mcp 的环境） |
+| MCP 工具同步调用报错 | `NotImplementedError: StructuredTool does not support sync invocation` | MCP 工具只支持 `ainvoke`；用常驻事件循环跑 `tool.ainvoke()` 统一接口 |
+| Windows stdio MCP 子进程 | ProactorEventLoop 不支持带 stdin 管道的 subprocess | `asyncio.set_event_loop_policy(WindowsSelectorEventLoopPolicy())`，必须在建 loop 前设 |
+| pip 升级依赖后 build_index 假死 | `WinError 10060` 反复请求 `adapter_config.json`、重试 5 次像卡死 | 新 sentence-transformers 6.x 会检查 adapter 等文件；`langchain_text_splitters` 间接 import huggingface_hub，导致 `HF_HUB_OFFLINE` 在 `load_dotenv` 前被固化 False。splitter.py 把 `from app.config import settings` 提到最前（和 embeddings/reranker 同规矩）。**教训：升级依赖后要重跑建索引验证离线加载** |
+| bind_tools 裸调、模型乱调无参工具 | 问「什么是 MCP」却调了查时间工具、走错分支 | 给 `call_tools` 加系统提示，约束「只有明确需要工具（计算/查时间）才调，知识问答不要调」。LLM 路由是概率性的，要靠提示词把边界讲清 |
 
 
 
@@ -223,4 +228,34 @@
 - [x] 多轮记忆（查询改写）
 - [x] 重排（rerank）
 - [x] 评测（RAGAS）
-- [ ] 工具调用（MCP）
+- [x] 工具调用（MCP）——原生 function calling（计算器）+ MCP（独立 server 提供「查时间」工具），见第 15 节
+
+---
+
+## 15. 工具调用（MCP）
+
+**面试官问**：为什么 RAG 还要加工具调用？
+**答**：RAG 只能答「知识库里有的」问题，遇到「算一下 123×456」「现在几点」这类问题只能硬答「我不知道」。工具调用让 agent 多了一条「执行动作」的路径——查库之外还能调外部工具，这才是从「RAG 问答」到「真 Agent」的关键一跃。
+**代码**：[app/agent.py](../app/agent.py) 的 `call_tools` 节点
+
+**面试官问**：工具调用加在图里哪个位置、怎么接线？
+**答**：在图最前面 `contextualize` 之后插一个 `call_tools` 节点 + 条件边。`call_tools` 用 `bind_tools` 把工具挂到模型上，模型若在回复里带 `tool_calls` 就执行、写进 `tool_result`；`route_after_tools` 按 `used_tool` 决定走 `generate`（用了工具）还是 `retrieve`（普通知识问答）。工具和检索是「并行的两条路」，原有的 RAG 环（retrieve→grade→rewrite）原封不动。
+**代码**：[app/agent.py](../app/agent.py) 的 `call_tools` + `route_after_tools` + `build_graph`
+
+**面试官问**：模型怎么知道什么时候该调工具、传什么参数？
+**答**：不用我写 if/else 规则。`bind_tools` 会把每个工具的「名称 + 参数说明」作为 schema 传给模型，模型自己决定要不要调、传什么参数。它想调就返回 `tool_calls`，不想调就返回普通文本——这正是 function calling 的机制，不是规则路由。工具 docstring 就是模型判断的依据。但 LLM 路由是概率性的：裸调会让模型对「无参工具」过度触发（问「什么是 MCP」却去查时间），所以我在 `call_tools` 里加了一句系统提示，把边界讲清——「只有明确需要工具（计算/查时间）才调，知识问答不要调」。
+
+**面试官问**：函数调用（function calling）和 MCP 有什么区别？
+**答**：两个层次。函数调用是「机制」——模型输出 `{name, arguments}`，宿主执行后把结果喂回；MCP 是「协议/传输」——把工具怎么被发现、怎么被调用标准化，让工具从「硬编码在代码里」变成「独立进程按协议提供」，避免 M×N 集成地狱。项目里我先用原生 function calling 写了个计算器（搞懂机制），再用 `langchain-mcp-adapters` 接一个独立 MCP server 提供「查当前时间」工具（搞懂协议）——agent 的 `bind_tools` 接线一行没改，只是工具来源变了。这就是「MCP 只是换了个工具来源」的实证。
+**代码**：[app/tools.py](../app/tools.py)（原生）+ [app/mcp_server.py](../app/mcp_server.py) + [app/mcp_client.py](../app/mcp_client.py)（MCP）
+
+**面试官问**：计算器工具为什么不用 eval？
+**答**：`eval("__import__('os').system(...)")` 会执行任意代码，有注入风险。我用 `ast` 把字符串解析成表达式树，白名单只放行数字、括号和 `+ - * / % **`，其余一律拒绝。这是「安全求值」的常见做法。
+**代码**：[app/tools.py](../app/tools.py) 的 `_safe_eval`
+
+**面试官问**：加了工具调用，每次问答都要多一次 LLM 调用，划算吗？
+**答**：这是 agentic 的代价。`call_tools` 每次先问一次模型「要不要调工具」，多一次往返和延迟。换来的是「能处理知识库之外的问题」。可以优化（先做轻量关键词判断再决定要不要调 LLM），但这里先保证正确性和演示价值，延迟权衡可以讲清楚即可。
+
+**面试官问**：MCP 工具在 Windows 上踩了什么坑？
+**答**：三个。① stdio 子进程需要 `SelectorEventLoop`，默认 `ProactorEventLoop` 不支持带 stdin 管道的 subprocess；② 拉起 server 要用 `sys.executable` 不能用裸 `python`，否则 PATH 可能指到没装 mcp 的环境；③ MCP 是异步的、LangGraph 节点是同步的，MCP 工具还是「只支持 ainvoke 的 StructuredTool」，必须用常驻事件循环（后台线程）把 session 钉在同一个 loop 上，否则跨 loop 调用会失效。
+**代码**：[app/mcp_client.py](../app/mcp_client.py)

@@ -10,9 +10,12 @@
 3，overlap（重叠）干嘛的：切块时相邻两块保留 50 字重叠。防止一句话刚好卡在两块边界，被割断后语义丢失。
 
 """
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
+# 必须先导入 config：它内部 load_dotenv() 会把 .env 里的 HF_HUB_OFFLINE 写进环境变量，
+# 而 langchain_text_splitters 会间接导入 huggingface_hub——它会在 import 时立刻读取该变量并固化。
+# 顺序反了，HF_HUB_OFFLINE 就失效（离线加载变成联网 HEAD 超时、重试 5 次假死）。
 from app.config import settings
+
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 def split_text(text: str) -> list[str]:

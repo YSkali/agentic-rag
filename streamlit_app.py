@@ -50,15 +50,20 @@ if question:
 
         st.write(result["answer"])
 
-        if result["attempts"] > 1:
+        if result.get("used_tool"):
+            st.info(f"🔧 本次调用了工具：{result['tool_result']}")
+        elif result["attempts"] > 1:
             st.info(f"本次尝试 {result['attempts']} 次 —— 触发「改写重试」，自我纠错生效")
         else:
             st.success("本次一次命中，未触发改写")
 
         with st.expander("📚 查看引用来源"):
-            for i, src in enumerate(result["context"], 1):
-                st.markdown(f"**来源 {i}**")
-                st.text(src)
+            if result["context"]:
+                for i, src in enumerate(result["context"], 1):
+                    st.markdown(f"**来源 {i}**")
+                    st.text(src)
+            else:
+                st.caption("本次未检索知识库（走了工具分支）。")
 
     # 3.4 追加答案
     st.session_state.messages.append({"role": "assistant", "content": result["answer"]})

@@ -4,6 +4,7 @@ Agentic RAG:LangGraph版。索引质量不达标的时候，用来改写问题�
 """
 
 from typing import TypedDict
+from functools import lru_cache
 
 from langgraph.graph import StateGraph,START,END
 
@@ -13,6 +14,8 @@ from app.llm import get_llm
 #接入新的导入
 from app import reranker
 from app.config import settings
+from app.tools import TOOLS
+from app.mcp_client import get_mcp_tools, call_tool
 
 
 
@@ -22,12 +25,14 @@ MAX_ATTEMPTS = 2
 class RAGState(TypedDict):
     """图的状态：所有节点共享"""
     question: str
-    chat_history: list[str]   
+    chat_history: list[str]
     # 历史对话，格式 ["问：...\n答：...", ...]
     context: list[str]
     answer: str
     retrieval_ok: bool
     attempts: int
+    tool_result: str   # 工具调用的结果文本（没调工具则为空）
+    used_tool: bool    # 本轮是否调用了工具（路由判断用，对齐 retrieval_ok 的显式 flag 风格）
 
 
 GENERATE_TEMPLATE = """你是一个知识库问答助手，只根据下面的「资料」回答问题。
@@ -62,6 +67,21 @@ CONTEXTUALIZE_TEMPLATE = """根据下面的「对话历史」，把「追问」�
 {history}
 
 追问：{question}"""
+
+GENERATE_FROM_TOOL_TEMPLATE = """你是一个问答助手，根据下面的「工具返回结果」回答问题。
+
+工具返回结果：
+{tool_result}
+
+问题：{question}
+
+要求：
+- 直接基于工具结果作答，简洁、准确。
+- 如果工具结果出错或不足以回答，就如实说明。"""
+
+TOOL_SYSTEM_PROMPT = """你是一个知识库问答助手，可以调用工具来回答问题。
+只有当问题明确需要工具时才调用——例如「算一下…」需要计算器、「现在几点」需要查时间。
+如果是普通知识问答（问概念、原理、流程等），不要调用任何工具，直接输出普通文本即可。"""
 
 
 #--------5个重要主要节点（“图”的操作员）函数-------------
@@ -99,10 +119,17 @@ def grade(state:RAGState)->dict:
 
 #3，generate(state) —— 发言人（最终输出）
 def generate(state: RAGState) -> dict:
-    prompt = GENERATE_TEMPLATE.format(
-        context="\n\n".join(state["context"]),
-        question=state["question"],
-    )
+    # 走了工具分支 → 答案来自工具结果；否则来自检索到的资料
+    if state.get("used_tool"):
+        prompt = GENERATE_FROM_TOOL_TEMPLATE.format(
+            tool_result=state["tool_result"],
+            question=state["question"],
+        )
+    else:
+        prompt = GENERATE_TEMPLATE.format(
+            context="\n\n".join(state["context"]),
+            question=state["question"],
+        )
     result = get_llm().invoke(prompt)
     return {"answer": result.content}
 
@@ -134,6 +161,51 @@ def should_rewrite(state: RAGState) -> str:
     if state.get("retrieval_ok") or state.get("attempts", 0) >= MAX_ATTEMPTS:
         return "generate"
     return "rewrite"
+
+
+#8，call_tools(state) —— 工具箱（让 LLM 自己决定要不要调工具）
+@lru_cache(maxsize=1)
+def _all_tools() -> tuple:
+    """合并「原生工具 + MCP 发现的工具」，缓存一次。
+
+    MCP 可能因为环境问题加载失败，失败就退回只用原生工具——不阻塞 RAG 主流程。
+    """
+    tools = list(TOOLS)
+    try:
+        tools.extend(get_mcp_tools())
+    except Exception as e:
+        print(f"[警告] MCP 工具加载失败，仅用原生工具：{e}")
+    return tuple(tools)
+
+
+def call_tools(state: RAGState) -> dict:
+    """用 bind_tools 把工具挂到模型上，由模型自行判断是否调用。
+
+    - 模型判断需要工具 → 回复里带 tool_calls（工具名 + 参数），逐个执行、拼成文本写回 state；
+    - 模型判断不需要（普通知识问答）→ tool_calls 为空，走检索分支。
+    """
+    tools = _all_tools()
+    llm = get_llm().bind_tools(tools)
+    msg = llm.invoke([
+        ("system", TOOL_SYSTEM_PROMPT),
+        ("human", state["question"]),
+    ])
+
+    if not msg.tool_calls:
+        return {"used_tool": False, "tool_result": ""}
+
+    results = []
+    for tc in msg.tool_calls:
+        tool = next(t for t in tools if t.name == tc["name"])
+        result = call_tool(tool, tc["args"])
+        results.append(f"{tc['name']} 结果：{result}")
+    return {"used_tool": True, "tool_result": "\n".join(results)}
+
+
+#9，route_after_tools(state) —— 工具箱之后往哪走
+def route_after_tools(state: RAGState) -> str:
+    """用了工具 → 直接生成答案；没用 → 走检索（进入 RAG 环）。"""
+    return "generate" if state.get("used_tool") else "retrieve"
 
 
 
@@ -170,18 +242,20 @@ def build_graph(use_rerank: bool = True):
     g.add_node("generate", generate)
     g.add_node("rewrite", rewrite)
     g.add_node("contextualize", contextualize)
+    g.add_node("call_tools", call_tools)
 
     g.add_edge(START, "contextualize")
+    g.add_edge("contextualize", "call_tools")
+    # 工具判断：要调工具 → 直接生成；否则 → 进入检索
+    g.add_conditional_edges("call_tools", route_after_tools, {"generate": "generate", "retrieve": "retrieve"})
 
     if use_rerank:
         g.add_node("retrieve", make_retrieve(settings.TOP_K_RECALL))   # 召回 8
         g.add_node("rerank", rerank)
-        g.add_edge("contextualize", "retrieve")
         g.add_edge("retrieve", "rerank")
         g.add_edge("rerank", "grade")
     else:
         g.add_node("retrieve", make_retrieve(settings.TOP_K))          # 直接取 4
-        g.add_edge("contextualize", "retrieve")
         g.add_edge("retrieve", "grade")
 
     g.add_conditional_edges("grade", should_rewrite, {"generate": "generate", "rewrite": "rewrite"})
@@ -231,6 +305,8 @@ def ask(question: str, chat_history: list[str] | None = None, use_rerank: bool =
         "answer": "",
         "retrieval_ok": False,
         "attempts": 0,
+        "tool_result": "",
+        "used_tool": False,
     })
 
 
@@ -240,15 +316,17 @@ def ask(question: str, chat_history: list[str] | None = None, use_rerank: bool =
 #        print(step)
 
 if __name__ == "__main__":
-    # 第一轮
+    # 第一轮：普通知识问答（走检索）
     r1 = ask("什么是向量检索")
-    print("Q1:", r1["question"], "| 尝试:", r1["attempts"])
+    print("Q1:", r1["question"], "| 尝试:", r1["attempts"], "| 用了工具:", r1["used_tool"])
 
     # 第二轮：代词追问，带着上一轮历史
     history = [f"问：什么是向量检索\n答：{r1['answer']}"]
-    for step in graph.stream({
-        "question": "那它有什么缺点呢？",
-        "chat_history": history,
-        "context": [], "answer": "", "retrieval_ok": False, "attempts": 0,
-    }):
-        print(step)   # 看 contextualize 节点输出的改写后问题
+    r2 = ask("那它有什么缺点呢？", chat_history=history)
+    print("Q2 改写后:", r2["question"], "| 用了工具:", r2["used_tool"])
+
+    # 第三轮：需要工具的问题（走工具分支，不检索）
+    r3 = ask("算一下 123*456 等于多少")
+    print("Q3:", r3["question"], "| 用了工具:", r3["used_tool"])
+    print("  工具结果:", r3["tool_result"])
+    print("  答案:", r3["answer"])

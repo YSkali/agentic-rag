@@ -5,6 +5,10 @@ langchain-openai
 langchain-community<0.4.2   # 0.4.2 移除了 vertexai 模块，与 ragas 冲突
 ragas
 
+# ===== 工具调用（MCP）=====
+langchain-mcp-adapters
+mcp
+
 # ===== Embedding（本地 BGE）=====
 sentence-transformers
 # torch 建议用 CPU 版安装：
