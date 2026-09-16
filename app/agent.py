@@ -33,6 +33,7 @@ class RAGState(TypedDict):
     attempts: int
     tool_result: str   # 工具调用的结果文本（没调工具则为空）
     used_tool: bool    # 本轮是否调用了工具（路由判断用，对齐 retrieval_ok 的显式 flag 风格）
+    trace: list[str]   # 记录每个节点的执行轨迹（用于前端可视化）
 
 
 GENERATE_TEMPLATE = """你是一个知识库问答助手，只根据下面的「资料」回答问题。
@@ -81,7 +82,7 @@ GENERATE_FROM_TOOL_TEMPLATE = """你是一个问答助手，根据下面的「�
 
 TOOL_SYSTEM_PROMPT = """你是一个知识库问答助手，可以调用工具来回答问题。
 只有当问题明确需要工具时才调用——
-- 计算器：仅当问题中包含算术表达式（含 +-*/%** 运算符，如「1+1」「123*456」「2的10次方」）时才调用。注意「算」字不一定代表算术（如「算一下明天是几号」是日期题，不是算术），关键看有没有算术运算符。
+- 计算器：只要问题中包含算术表达式（含 +-*/%** 运算符，如「1+1」「123*456」「2的10次方」），就必须调用计算器，不要凭自己知识口算。注意「算」字不一定代表算术（如「算一下明天是几号」是日期题，不是算术），关键看有没有算术运算符。
 - 查时间：仅当问题明确询问当前时间/日期（如「现在几点」「今天几号」）时才调用。
 如果是普通知识问答（问概念、原理、流程等），不要调用任何工具，直接输出普通文本即可。"""
 
@@ -99,14 +100,18 @@ def make_retrieve(k: int):
     """生成一个「召回 k 个」的检索节点。k 由有无 rerank 决定。"""
     def retrieve(state: RAGState) -> dict:
         chunks = vectorstore.search(state["question"], k=k)
-        return {"context": chunks, "attempts": state.get("attempts", 0) + 1}
+        trace = state.get("trace", []) + [f"📚 语义检索：召回 {len(chunks)} 个片段（top-{k}）"]
+        return {"context": chunks, "attempts": state.get("attempts", 0) + 1, "trace": trace}
     return retrieve
 
 
 #7，节点名 rerank 是给图用的，真正干活的是 reranker.rerank()
 def rerank(state: RAGState) -> dict:
     """重排：对召回的候选块精排，只留最相关的 top-k（向量召回多、精排少）。"""
-    return {"context": reranker.rerank(state["question"], state["context"])}
+    before = len(state["context"])
+    new_context = reranker.rerank(state["question"], state["context"])
+    trace = state.get("trace", []) + [f"📊 重排精排：{before} 个 → {len(new_context)} 个（速度换精度）"]
+    return {"context": new_context, "trace": trace}
 
 
 #2，grade(state) —— 裁判员（LLM自我反思）
@@ -116,7 +121,9 @@ def grade(state:RAGState)->dict:
         question=state["question"],
     )
     result = get_llm().invoke(prompt)
-    return {"retrieval_ok": "够" in result.content}
+    ok = "够" in result.content
+    trace = state.get("trace", []) + [f"⚖️ 质检：{'✅ 资料足够' if ok else '❌ 资料不够'}"]
+    return {"retrieval_ok": ok, "trace": trace}
 
 
 #3，generate(state) —— 发言人（最终输出）
@@ -133,28 +140,35 @@ def generate(state: RAGState) -> dict:
             question=state["question"],
         )
     result = get_llm().invoke(prompt)
-    return {"answer": result.content}
+    trace = state.get("trace", []) + ["💡 生成答案"]
+    return {"answer": result.content, "trace": trace}
 
 
 #4，rewrite(state) —— 智囊团（查询改写）
 def rewrite(state: RAGState) -> dict:
     prompt = REWRITE_TEMPLATE.format(question=state["question"])
     result = get_llm().invoke(prompt)
-    return {"question": result.content}
+    new_q = result.content
+    trace = state.get("trace", []) + [f"🔄 改写重试：「{state['question']}」→「{new_q}」"]
+    return {"question": new_q, "trace": trace}
 
 #6，加个门卫（多轮记忆）
 def contextualize(state: RAGState) -> dict:
     """第一轮无历史 → 原样返回；有历史 → 把代词追问改写成独立问题。"""
     history = state.get("chat_history", [])
+    trace = state.get("trace", []) + ["🔍 多轮记忆：无历史，原样通过"]
     if not history:
-        return {"question": state["question"]}
+        return {"question": state["question"], "trace": trace}
 
     prompt = CONTEXTUALIZE_TEMPLATE.format(
         history="\n\n".join(history),
         question=state["question"],
     )
     result = get_llm().invoke(prompt)
-    return {"question": result.content}
+    new_q = result.content
+    if new_q.strip() != state["question"].strip():
+        trace[-1] = f"🔍 查询改写：「{state['question']}」→「{new_q}」"
+    return {"question": new_q, "trace": trace}
 
 
 #5，should_rewrite(state) —— 最终回答（路由决策）
@@ -193,15 +207,20 @@ def call_tools(state: RAGState) -> dict:
         ("human", state["question"]),
     ])
 
+    trace = state.get("trace", [])
     if not msg.tool_calls:
-        return {"used_tool": False, "tool_result": ""}
+        trace.append("🚫 工具判断：无需调用工具，走检索")
+        return {"used_tool": False, "tool_result": "", "trace": trace}
 
     results = []
+    tool_names = []
     for tc in msg.tool_calls:
         tool = next(t for t in tools if t.name == tc["name"])
         result = call_tool(tool, tc["args"])
         results.append(f"{tc['name']} 结果：{result}")
-    return {"used_tool": True, "tool_result": "\n".join(results)}
+        tool_names.append(tc["name"])
+    trace.append(f"🔧 调用工具：{', '.join(tool_names)}")
+    return {"used_tool": True, "tool_result": "\n".join(results), "trace": trace}
 
 
 #9，route_after_tools(state) —— 工具箱之后往哪走
@@ -309,6 +328,7 @@ def ask(question: str, chat_history: list[str] | None = None, use_rerank: bool =
         "attempts": 0,
         "tool_result": "",
         "used_tool": False,
+        "trace": [],
     })
 
 

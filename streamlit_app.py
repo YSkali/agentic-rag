@@ -50,6 +50,18 @@ if question:
 
         st.write(result["answer"])
 
+        # ── Agent 执行路径可视化 ──
+        trace = result.get("trace", [])
+        if trace:
+            # 把每条 trace 按节点类型分组显示
+            path_str = "  →  ".join(t.split("：")[0] for t in trace)  # 只取 emoji + 节点名
+            st.caption(f"**Agent 执行路径**：{path_str}")
+
+            with st.expander("🔎 查看详细执行过程", expanded=False):
+                for t in trace:
+                    st.markdown(f"- {t}")
+
+        # ── 工具 / 纠错提示 ──
         if result.get("used_tool"):
             st.info(f"🔧 本次调用了工具：{result['tool_result']}")
         elif result["attempts"] > 1:
