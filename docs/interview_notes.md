@@ -216,6 +216,8 @@
 | pip 升级依赖后 build_index 假死 | `WinError 10060` 反复请求 `adapter_config.json`、重试 5 次像卡死 | 新 sentence-transformers 6.x 会检查 adapter 等文件；`langchain_text_splitters` 间接 import huggingface_hub，导致 `HF_HUB_OFFLINE` 在 `load_dotenv` 前被固化 False。splitter.py 把 `from app.config import settings` 提到最前（和 embeddings/reranker 同规矩）。**教训：升级依赖后要重跑建索引验证离线加载** |
 | bind_tools 裸调、模型乱调无参工具 | 问「什么是 MCP」却调了查时间工具、走错分支 | 给 `call_tools` 加系统提示，约束「只有明确需要工具（计算/查时间）才调，知识问答不要调」。LLM 路由是概率性的，要靠提示词把边界讲清 |
 | 工具路由的语义歧义（「算」字误触发） | 「帮我算一下明天是几号」误触发计算器（答案错误），因为系统提示词写「算一下→计算器」，模型看到「算」字就调 | 把触发条件从「含『算』字」改成「含 +-*/%** 运算符」——看题型本质而非关键字。日期题走 MCP 时间工具，无运算符的「算一算我有多少存款」答「我不知道」。**教训：LLM 路由靠关键词匹配不可靠，要描述「特征」而非「关键字」** |
+| 质检与生成的语义偏差（答不知道却挂引用） | 质检节点判「够」（retrieval_ok=True），但 generate 按模板答「我不知道」，context 仍非空 → 前端展示引用，造成矛盾 | generate 节点检测答案含「我不知道」→ 清空 context/context_meta，不展示引用。**教训：质检（grade）和生成（generate）是两个独立 LLM 调用，可能产生语义偏差，要在下游做兜底** |
+| LLM 路由概率性（简单算术跳步） | 「1+1」约 30% 概率不触发计算器，模型觉得太简单就口算 | 提示词加固「只要含运算符就必须调用计算器，不要口算」，稳定到 100%。**教训：LLM 函数调用是概率性的，提示词要写「必须」而非「可以」** |
 
 
 
