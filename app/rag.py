@@ -15,16 +15,16 @@ PROMPT_TEMPLATE = """你是一个知识库问答助手，只根据下面的「�
 
 
 def answer(question: str) -> dict:
-    # 1. 检索：拿 top-k 片段
-    chunks = vectorstore.search(question)
-    context = "\n\n".join(chunks)   # 多块拼成一段
+    # 1. 检索：拿 top-k 片段（返回含 text/source 的 dict 列表）
+    hits = vectorstore.search(question)
+    context = "\n\n".join(h["text"] for h in hits)   # 多块拼成一段
 
     # 2. 生成：填模板 → 调模型
     prompt = PROMPT_TEMPLATE.format(context=context, question=question)
     result = get_llm().invoke(prompt)
 
-    # 3. 返回答案 + 来源
-    return {"answer": result.content, "sources": chunks}
+    # 3. 返回答案 + 来源（保留完整 dict 供前端展示文件名）
+    return {"answer": result.content, "sources": hits}
 
 
 if __name__ == "__main__":

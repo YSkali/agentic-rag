@@ -35,23 +35,37 @@ def get_collection(name: str = "rag_docs"):
     )
 
 
-def add_chunks(chunks: list[str]) -> int:
-    """把文档块向量化后写入向量库。upsert 保证重复执行不报错。"""
+def add_chunks(chunks: list[str], metadatas: list[dict] | None = None) -> int:
+    """把文档块向量化后写入向量库。upsert 保证重复执行不报错。
+
+    metadatas: 与 chunks 一一对应的元数据列表，如 [{"source": "rag_notes.txt"}, ...]。
+               用于追溯每个块来自哪个原始文档（前端展示来源文件名）。
+    """
     collection = get_collection()
     vectors = embeddings.embed_documents(chunks)
     ids = [str(i) for i in range(len(chunks))]
-    collection.upsert(ids=ids, embeddings=vectors, documents=chunks)
-    #用upsert 而非 add	；因为幂等——重复建索引不报"ID 已存在"错
+    if metadatas is None:
+        metadatas = [{} for _ in chunks]
+    collection.upsert(ids=ids, embeddings=vectors, documents=chunks, metadatas=metadatas)
     return len(chunks)
 
 
-def search(query: str, k: int | None = None) -> list[str]:
-    """检索与问题最相似的 top-k 个文档块，返回块内容列表。"""
+def search(query: str, k: int | None = None) -> list[dict]:
+    """检索与问题最相似的 top-k 个文档块。
+
+    返回 [{"text": ..., "source": "xxx.txt"}, ...] 列表，
+    source 为原始文件名（若建索引时未记录元数据则为空字符串）。
+    """
     collection = get_collection()
     k = k or settings.TOP_K
     q_vec = embeddings.embed_query(query)
     result = collection.query(query_embeddings=[q_vec], n_results=k)
-    return result["documents"][0]
+    docs = result["documents"][0]
+    metas = (result.get("metadatas") or [[]])[0] if result.get("metadatas") else [{}] * len(docs)
+    return [
+        {"text": doc, "source": (metas[i] or {}).get("source", "")}
+        for i, doc in enumerate(docs)
+    ]
 
 
 def reset_collection(name: str = "rag_docs") -> None:

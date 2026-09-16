@@ -34,6 +34,7 @@ class RAGState(TypedDict):
     tool_result: str   # 工具调用的结果文本（没调工具则为空）
     used_tool: bool    # 本轮是否调用了工具（路由判断用，对齐 retrieval_ok 的显式 flag 风格）
     trace: list[str]   # 记录每个节点的执行轨迹（用于前端可视化）
+    context_meta: list[dict]  # 与 context 一一对应的元数据（含 source 文件名）
 
 
 GENERATE_TEMPLATE = """你是一个知识库问答助手，只根据下面的「资料」回答问题。
@@ -99,9 +100,11 @@ TOOL_SYSTEM_PROMPT = """你是一个知识库问答助手，可以调用工具�
 def make_retrieve(k: int):
     """生成一个「召回 k 个」的检索节点。k 由有无 rerank 决定。"""
     def retrieve(state: RAGState) -> dict:
-        chunks = vectorstore.search(state["question"], k=k)
-        trace = state.get("trace", []) + [f"📚 语义检索：召回 {len(chunks)} 个片段（top-{k}）"]
-        return {"context": chunks, "attempts": state.get("attempts", 0) + 1, "trace": trace}
+        hits = vectorstore.search(state["question"], k=k)
+        context = [h["text"] for h in hits]
+        meta = [{"source": h.get("source", "")} for h in hits]
+        trace = state.get("trace", []) + [f"📚 语义检索：召回 {len(context)} 个片段（top-{k}）"]
+        return {"context": context, "context_meta": meta, "attempts": state.get("attempts", 0) + 1, "trace": trace}
     return retrieve
 
 
@@ -109,9 +112,18 @@ def make_retrieve(k: int):
 def rerank(state: RAGState) -> dict:
     """重排：对召回的候选块精排，只留最相关的 top-k（向量召回多、精排少）。"""
     before = len(state["context"])
-    new_context = reranker.rerank(state["question"], state["context"])
+    # 带原始下标一起重排，避免重复文本导致 meta 错位
+    indexed = list(enumerate(state["context"]))
+    reranked_indexed = reranker.rerank_with_index(state["question"], indexed)
+    new_context = [t for _, t in reranked_indexed]
+    new_meta = []
+    for orig_idx, _ in reranked_indexed:
+        if orig_idx < len(state.get("context_meta", [])):
+            new_meta.append(state["context_meta"][orig_idx])
+        else:
+            new_meta.append({})
     trace = state.get("trace", []) + [f"📊 重排精排：{before} 个 → {len(new_context)} 个（速度换精度）"]
-    return {"context": new_context, "trace": trace}
+    return {"context": new_context, "context_meta": new_meta, "trace": trace}
 
 
 #2，grade(state) —— 裁判员（LLM自我反思）
@@ -329,6 +341,7 @@ def ask(question: str, chat_history: list[str] | None = None, use_rerank: bool =
         "tool_result": "",
         "used_tool": False,
         "trace": [],
+        "context_meta": [],
     })
 
 
