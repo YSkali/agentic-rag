@@ -146,13 +146,23 @@ def generate(state: RAGState) -> dict:
             tool_result=state["tool_result"],
             question=state["question"],
         )
-    else:
-        prompt = GENERATE_TEMPLATE.format(
-            context="\n\n".join(state["context"]),
-            question=state["question"],
-        )
+        result = get_llm().invoke(prompt)
+        trace = state.get("trace", []) + ["💡 生成答案（来自工具）"]
+        return {"answer": result.content, "trace": trace}
+
+    # 检索分支
+    prompt = GENERATE_TEMPLATE.format(
+        context="\n\n".join(state["context"]),
+        question=state["question"],
+    )
     result = get_llm().invoke(prompt)
-    trace = state.get("trace", []) + ["💡 生成答案"]
+
+    # 模型答「我不知道」→ 清空引用，避免「答不知道却挂着引用」的矛盾
+    if "我不知道" in result.content:
+        trace = state.get("trace", []) + ["💡 生成答案：模型判断资料不足，答「我知道」（不展示引用）"]
+        return {"answer": result.content, "context": [], "context_meta": [], "trace": trace}
+
+    trace = state.get("trace", []) + ["💡 生成答案（来自检索）"]
     return {"answer": result.content, "trace": trace}
 
 
