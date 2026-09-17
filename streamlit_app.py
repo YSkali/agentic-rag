@@ -4,7 +4,7 @@
 """
 import streamlit as st
 
-from app.agent import ask
+from app.agent import stream_ask
 
 st.set_page_config(page_title="Agentic RAG 问答", page_icon="🤖", layout="wide")
 st.title("🤖 Agentic RAG 知识库问答")
@@ -82,18 +82,37 @@ if question:
     with st.chat_message("user"):
         st.write(question)
 
-    # 2.3 生成答案
+    # 2.3 流式生成答案（A：流式输出）
     with st.chat_message("assistant"):
-        with st.spinner("检索中（首次加载本地模型，约 20-40 秒）..."):
-            result = ask(question, chat_history=history)
+        # 用 placeholder 容器，流式更新
+        status_container = st.empty()      # 显示当前节点
+        path_container = st.empty()        # 显示执行路径
+        answer_container = st.empty()      # 显示答案
+        detail_container = st.container()  # 详情（工具/引用）
 
-        st.write(result["answer"])
+        result = None
+        for event in stream_ask(question, chat_history=history):
+            if event["type"] == "node":
+                node = event["node"]
+                trace = event["trace"]
+                # 实时显示当前节点
+                status_container.info(f"🔄 Agent 执行中：**{node}** 节点")
+                # 实时更新路径
+                path_str = "  →  ".join(t.split("：")[0] for t in trace)
+                path_container.caption(f"**Agent 执行路径**：{path_str}")
 
-        # ── Agent 执行路径可视化（#1）──
+            elif event["type"] == "done":
+                result = event["result"]
+
+        # ── 流式结束，渲染最终结果 ──
+        status_container.empty()
+
+        answer_container.write(result["answer"])
+
         trace = result.get("trace", [])
         if trace:
             path_str = "  →  ".join(t.split("：")[0] for t in trace)
-            st.caption(f"**Agent 执行路径**：{path_str}")
+            path_container.caption(f"**Agent 执行路径**：{path_str}")
 
             with st.expander("🔎 查看详细执行过程", expanded=False):
                 for t in trace:

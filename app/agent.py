@@ -355,6 +355,42 @@ def ask(question: str, chat_history: list[str] | None = None, use_rerank: bool =
     })
 
 
+def stream_ask(question: str, chat_history: list[str] | None = None, use_rerank: bool = True):
+    """流式执行 Agent，逐节点 yield 事件。
+
+    graph.stream() 每完成一个节点就 yield 一次：{节点名: 部分状态更新}。
+    我们把它转成前端友好的格式：
+      - {"type": "node", "node": 节点名, "trace": [...]}  —— 节点完成
+      - {"type": "done", "result": 最终状态字典}          —— 全部完成
+
+    前端可以实时显示 Agent 正在走哪个节点，体验远优于一次性返回。
+    """
+    g = graph if use_rerank else graph_no_rerank
+    initial_state = {
+        "question": question,
+        "chat_history": chat_history or [],
+        "context": [],
+        "answer": "",
+        "retrieval_ok": False,
+        "attempts": 0,
+        "tool_result": "",
+        "used_tool": False,
+        "trace": [],
+        "context_meta": [],
+    }
+
+    final_state = dict(initial_state)
+    for node_event in g.stream(initial_state):
+        # node_event 格式：{"节点名": {该节点的部分状态更新}}
+        node_name = next(iter(node_event))
+        node_output = node_event[node_name]
+        final_state.update(node_output)
+        trace = final_state.get("trace", [])
+        yield {"type": "node", "node": node_name, "trace": trace}
+
+    yield {"type": "done", "result": final_state}
+
+
 
 #if __name__ == "__main__":
 #    for step in graph.stream({"question": "什么是向量检索", "context": [], "answer": "", "retrieval_ok": False, "attempts": 0}):
