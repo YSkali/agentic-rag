@@ -231,7 +231,7 @@ def call_tools(state: RAGState) -> dict:
 
     trace = state.get("trace", [])
     if not msg.tool_calls:
-        trace.append("🚫 工具判断：无需调用工具，走检索")
+        trace.append("🚫 路由判断：知识问答，走检索")
         return {"used_tool": False, "tool_result": "", "trace": trace}
 
     results = []

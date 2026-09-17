@@ -2,6 +2,8 @@
 
 用法：streamlit run streamlit_app.py
 """
+import time
+
 import streamlit as st
 
 from app.agent import stream_ask
@@ -84,35 +86,36 @@ if question:
 
     # 2.3 流式生成答案（A：流式输出）
     with st.chat_message("assistant"):
-        # 用 placeholder 容器，流式更新
-        status_container = st.empty()      # 显示当前节点
-        path_container = st.empty()        # 显示执行路径
-        answer_container = st.empty()      # 显示答案
-        detail_container = st.container()  # 详情（工具/引用）
-
+        # ── 第一遍：实时显示节点执行进度 ──
+        progress = st.empty()  # 进度提示（执行完清空）
         result = None
+
         for event in stream_ask(question, chat_history=history):
             if event["type"] == "node":
                 node = event["node"]
                 trace = event["trace"]
-                # 实时显示当前节点
-                status_container.info(f"🔄 Agent 执行中：**{node}** 节点")
-                # 实时更新路径
-                path_str = "  →  ".join(t.split("：")[0] for t in trace)
-                path_container.caption(f"**Agent 执行路径**：{path_str}")
-
+                path_str = " → ".join(t.split("：")[0] for t in trace)
+                progress.info(f"🔄 Agent 执行中：{path_str}")
             elif event["type"] == "done":
                 result = event["result"]
 
-        # ── 流式结束，渲染最终结果 ──
-        status_container.empty()
+        progress.empty()  # 清除进度提示
 
-        answer_container.write(result["answer"])
+        # ── 第二遍：答案逐字揭示（模拟流式） ──
+        answer = result["answer"]
+        answer_placeholder = st.empty()
+        displayed = ""
+        for char in answer:
+            displayed += char
+            answer_placeholder.markdown(displayed + "▌")  # 光标效果
+            time.sleep(0.015)  # 控制打字速度
+        answer_placeholder.markdown(answer)  # 去掉光标
 
+        # ── Agent 执行路径 ──
         trace = result.get("trace", [])
         if trace:
             path_str = "  →  ".join(t.split("：")[0] for t in trace)
-            path_container.caption(f"**Agent 执行路径**：{path_str}")
+            st.caption(f"**Agent 执行路径**：{path_str}")
 
             with st.expander("🔎 查看详细执行过程", expanded=False):
                 for t in trace:
