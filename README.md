@@ -99,6 +99,50 @@ streamlit run streamlit_app.py
 
 浏览器自动打开 `localhost:8501`，输入问题即可（首次提问会加载本地模型，约 20-40 秒）。
 
+## 演示
+
+> 图片通过 jsDelivr CDN 加速，确保 GitHub 上加载稳定。
+
+### 主界面
+
+![主界面](https://cdn.jsdelivr.net/gh/YSkali/agentic-rag@main/docs/images/1.png)
+
+### 侧边栏：控制 + 主题 + 示例问题
+
+![侧边栏控制](https://cdn.jsdelivr.net/gh/YSkali/agentic-rag@main/docs/images/2.png)
+
+### 导出对话 + 清空 + 评测指标
+
+![导出与评测](https://cdn.jsdelivr.net/gh/YSkali/agentic-rag@main/docs/images/3.png)
+
+### 知识问答：问「什么是 RAG？」
+
+![RAG问答](https://cdn.jsdelivr.net/gh/YSkali/agentic-rag@main/docs/images/4.png)
+
+### 详细执行过程（节点计时）
+
+![执行过程](https://cdn.jsdelivr.net/gh/YSkali/agentic-rag@main/docs/images/5.png)
+
+### 引用来源（可追溯）
+
+![引用来源](https://cdn.jsdelivr.net/gh/YSkali/agentic-rag@main/docs/images/6.png)
+
+### 多轮对话：追问「那它有什么缺点？」
+
+![多轮对话](https://cdn.jsdelivr.net/gh/YSkali/agentic-rag@main/docs/images/7.png)
+
+### 防幻觉：问「怎么做红烧肉？」答「我不知道」
+
+![防幻觉](https://cdn.jsdelivr.net/gh/YSkali/agentic-rag@main/docs/images/8.png)
+
+### 工具调用：算术题（计算器）
+
+![计算器](https://cdn.jsdelivr.net/gh/YSkali/agentic-rag@main/docs/images/9.png)
+
+### 工具调用：查当前时间
+
+![查时间](https://cdn.jsdelivr.net/gh/YSkali/agentic-rag@main/docs/images/10.png)
+
 ## 评测
 
 - 用 RAGAS 让 LLM 当评委，给每个回答打三个分：忠实度 / 答案相关性 / 上下文精度（ContextPrecision，`scripts/evaluate.py`）
