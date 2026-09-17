@@ -13,6 +13,8 @@ def get_reranker() -> CrossEncoder:
 
 
 def rerank(query: str, candidates: list[str]) -> list[str]:
+    if not candidates:
+        return []
     pairs = [[query, c] for c in candidates]
     scores = get_reranker().predict(pairs)
     ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
@@ -24,6 +26,8 @@ def rerank_with_index(query: str, indexed_candidates: list[tuple[int, str]]) -> 
 
     用于 agent.py 的 rerank 节点——重排后仍能追溯每个块对应的元数据（来源文件名）。
     """
+    if not indexed_candidates:
+        return []
     pairs = [[query, text] for _, text in indexed_candidates]
     scores = get_reranker().predict(pairs)
     ranked = sorted(

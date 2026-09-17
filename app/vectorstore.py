@@ -40,12 +40,20 @@ def add_chunks(chunks: list[str], metadatas: list[dict] | None = None) -> int:
 
     metadatas: 与 chunks 一一对应的元数据列表，如 [{"source": "rag_notes.txt"}, ...]。
                用于追溯每个块来自哪个原始文档（前端展示来源文件名）。
+
+    注意：ID 基于内容哈希生成，相同内容重复添加会覆盖（幂等），
+          不同内容不会因 ID 冲突互相覆盖。
     """
+    import hashlib
     collection = get_collection()
     vectors = embeddings.embed_documents(chunks)
-    ids = [str(i) for i in range(len(chunks))]
+    # 用「内容+来源」生成稳定 ID，避免简单序号导致的增量添加冲突
     if metadatas is None:
         metadatas = [{} for _ in chunks]
+    ids = [
+        hashlib.md5(f"{metadatas[i].get('source', '')}:{chunks[i]}".encode("utf-8")).hexdigest()
+        for i in range(len(chunks))
+    ]
     collection.upsert(ids=ids, embeddings=vectors, documents=chunks, metadatas=metadatas)
     return len(chunks)
 

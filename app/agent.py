@@ -3,6 +3,8 @@ Agentic RAG:LangGraph版。索引质量不达标的时候，用来改写问题�
 最多MAX_ATTEMPTS次
 """
 
+import time
+
 from typing import TypedDict
 from functools import lru_cache
 
@@ -55,14 +57,24 @@ GRADE_TEMPLATE = """判断下面的「资料」是否足以回答「问题」。
 
 问题：{question}
 
-只回答一个字：「够」或「不够」。资料与问题相关、且包含能回答的信息，答「够」；否则答「不够」。"""
+判断标准（必须同时满足）：
+1. 资料与问题【主题相关】——不是泛泛提及，而是真的在讲同一件事；
+2. 资料包含【能直接回答问题的具体信息】——而不是只沾边的背景知识。
+
+两条都满足才答「够」；任何一条不满足就答「不够」。
+只回答一个字：「够」或「不够」。"""
 
 REWRITE_TEMPLATE = """下面是一个可能检索不到相关资料的问题。请把它改写得更具体、更利于检索（提取核心关键词、去掉口语化），只输出改写后的问题，不要解释。
 
 原问题：{question}"""
 
 CONTEXTUALIZE_TEMPLATE = """根据下面的「对话历史」，把「追问」里的指代词（如「它」「这」「那」）替换成具体内容，改写成一句可以独立理解、独立检索的问题。
-如果「追问」里本来就没有指代词、也不依赖上文，就直接原样输出。
+
+规则：
+- 如果「追问」里没有指代词、也不依赖上文，就直接原样输出；
+- 如果答句提供了明确主题（如"RAG 是一种…"），用答句主题替换代词；
+- 如果答句是「我不知道」或没有提供主题信息，则从【问句】里提取核心名词（主语/主题）来替换代词。
+
 只输出改写后的问题，不要任何解释。
 
 对话历史：
@@ -100,10 +112,12 @@ TOOL_SYSTEM_PROMPT = """你是一个知识库问答助手，可以调用工具�
 def make_retrieve(k: int):
     """生成一个「召回 k 个」的检索节点。k 由有无 rerank 决定。"""
     def retrieve(state: RAGState) -> dict:
+        start = time.time()
         hits = vectorstore.search(state["question"], k=k)
         context = [h["text"] for h in hits]
         meta = [{"source": h.get("source", "")} for h in hits]
-        trace = state.get("trace", []) + [f"📚 语义检索：召回 {len(context)} 个片段（top-{k}）"]
+        duration = time.time() - start
+        trace = state.get("trace", []) + [f"📚 语义检索：召回 {len(context)} 个片段（top-{k}） ⏱️ {duration:.1f}s"]
         return {"context": context, "context_meta": meta, "attempts": state.get("attempts", 0) + 1, "trace": trace}
     return retrieve
 
@@ -111,6 +125,7 @@ def make_retrieve(k: int):
 #7，节点名 rerank 是给图用的，真正干活的是 reranker.rerank()
 def rerank(state: RAGState) -> dict:
     """重排：对召回的候选块精排，只留最相关的 top-k（向量召回多、精排少）。"""
+    start = time.time()
     before = len(state["context"])
     # 带原始下标一起重排，避免重复文本导致 meta 错位
     indexed = list(enumerate(state["context"]))
@@ -122,32 +137,42 @@ def rerank(state: RAGState) -> dict:
             new_meta.append(state["context_meta"][orig_idx])
         else:
             new_meta.append({})
-    trace = state.get("trace", []) + [f"📊 重排精排：{before} 个 → {len(new_context)} 个（速度换精度）"]
+    duration = time.time() - start
+    trace = state.get("trace", []) + [f"📊 重排精排：{before} 个 → {len(new_context)} 个（速度换精度） ⏱️ {duration:.1f}s"]
     return {"context": new_context, "context_meta": new_meta, "trace": trace}
 
 
 #2，grade(state) —— 裁判员（LLM自我反思）
 def grade(state:RAGState)->dict:
+    start = time.time()
+    # 短路：检索结果为空 → 直接判定不够，节省一次 LLM 调用
+    if not state["context"]:
+        trace = state.get("trace", []) + ["⚖️ 质检：无检索资料，判定不够 ⏱️ 0.0s"]
+        return {"retrieval_ok": False, "trace": trace}
+
     prompt = GRADE_TEMPLATE.format(
         context="\n\n".join(state["context"]),
         question=state["question"],
     )
     result = get_llm().invoke(prompt)
-    ok = "够" in result.content
-    trace = state.get("trace", []) + [f"⚖️ 质检：{'✅ 资料足够' if ok else '❌ 资料不够'}"]
+    ok = result.content.strip() == "够"  # 精确匹配，避免「不够」被误判为 True
+    duration = time.time() - start
+    trace = state.get("trace", []) + [f"⚖️ 质检：{'✅ 资料足够' if ok else '❌ 资料不够'} ⏱️ {duration:.1f}s"]
     return {"retrieval_ok": ok, "trace": trace}
 
 
 #3，generate(state) —— 发言人（最终输出）
 def generate(state: RAGState) -> dict:
+    start = time.time()
     # 走了工具分支 → 答案来自工具结果；否则来自检索到的资料
-    if state.get("used_tool"):
+    if state.get("used_tool") and state.get("tool_result"):
         prompt = GENERATE_FROM_TOOL_TEMPLATE.format(
             tool_result=state["tool_result"],
             question=state["question"],
         )
         result = get_llm().invoke(prompt)
-        trace = state.get("trace", []) + ["💡 生成答案（来自工具）"]
+        duration = time.time() - start
+        trace = state.get("trace", []) + [f"💡 生成答案（来自工具） ⏱️ {duration:.1f}s"]
         return {"answer": result.content, "trace": trace}
 
     # 检索分支
@@ -156,30 +181,36 @@ def generate(state: RAGState) -> dict:
         question=state["question"],
     )
     result = get_llm().invoke(prompt)
+    answer = result.content
+    duration = time.time() - start
 
     # 模型答「我不知道」→ 清空引用，避免「答不知道却挂着引用」的矛盾
-    if "我不知道" in result.content:
-        trace = state.get("trace", []) + ["💡 生成答案：模型判断资料不足，答「我知道」（不展示引用）"]
-        return {"answer": result.content, "context": [], "context_meta": [], "trace": trace}
+    if "我不知道" in answer:
+        trace = state.get("trace", []) + [f"💡 生成答案：模型判断资料不足，答「我不知道」（清空引用） ⏱️ {duration:.1f}s"]
+        return {"answer": answer, "context": [], "context_meta": [], "trace": trace}
 
-    trace = state.get("trace", []) + ["💡 生成答案（来自检索）"]
-    return {"answer": result.content, "trace": trace}
+    trace = state.get("trace", []) + [f"💡 生成答案（来自检索） ⏱️ {duration:.1f}s"]
+    # 正常作答：保留 context/context_meta 供前端展示引用
+    return {"answer": answer, "context": state.get("context", []), "context_meta": state.get("context_meta", []), "trace": trace}
 
 
 #4，rewrite(state) —— 智囊团（查询改写）
 def rewrite(state: RAGState) -> dict:
+    start = time.time()
     prompt = REWRITE_TEMPLATE.format(question=state["question"])
     result = get_llm().invoke(prompt)
     new_q = result.content
-    trace = state.get("trace", []) + [f"🔄 改写重试：「{state['question']}」→「{new_q}」"]
+    duration = time.time() - start
+    trace = state.get("trace", []) + [f"🔄 改写重试：「{state['question']}」→「{new_q}」 ⏱️ {duration:.1f}s"]
     return {"question": new_q, "trace": trace}
 
 #6，加个门卫（多轮记忆）
 def contextualize(state: RAGState) -> dict:
     """第一轮无历史 → 原样返回；有历史 → 把代词追问改写成独立问题。"""
+    start = time.time()
     history = state.get("chat_history", [])
-    trace = state.get("trace", []) + ["🔍 多轮记忆：无历史，原样通过"]
     if not history:
+        trace = state.get("trace", []) + ["🔍 多轮记忆：无历史，原样通过"]
         return {"question": state["question"], "trace": trace}
 
     prompt = CONTEXTUALIZE_TEMPLATE.format(
@@ -188,8 +219,11 @@ def contextualize(state: RAGState) -> dict:
     )
     result = get_llm().invoke(prompt)
     new_q = result.content
+    duration = time.time() - start
     if new_q.strip() != state["question"].strip():
-        trace[-1] = f"🔍 查询改写：「{state['question']}」→「{new_q}」"
+        trace = state.get("trace", []) + [f"🔍 查询改写：「{state['question']}」→「{new_q}」 ⏱️ {duration:.1f}s"]
+    else:
+        trace = state.get("trace", []) + [f"🔍 多轮记忆：追问独立，无需改写 ⏱️ {duration:.1f}s"]
     return {"question": new_q, "trace": trace}
 
 
@@ -222,6 +256,7 @@ def call_tools(state: RAGState) -> dict:
     - 模型判断需要工具 → 回复里带 tool_calls（工具名 + 参数），逐个执行、拼成文本写回 state；
     - 模型判断不需要（普通知识问答）→ tool_calls 为空，走检索分支。
     """
+    start = time.time()
     tools = _all_tools()
     llm = get_llm().bind_tools(tools)
     msg = llm.invoke([
@@ -231,17 +266,30 @@ def call_tools(state: RAGState) -> dict:
 
     trace = state.get("trace", [])
     if not msg.tool_calls:
-        trace.append("🚫 路由判断：知识问答，走检索")
+        duration = time.time() - start
+        trace.append(f"🚫 路由判断：知识问答，走检索 ⏱️ {duration:.1f}s")
         return {"used_tool": False, "tool_result": "", "trace": trace}
 
     results = []
     tool_names = []
     for tc in msg.tool_calls:
-        tool = next(t for t in tools if t.name == tc["name"])
+        tool = next((t for t in tools if t.name == tc["name"]), None)
+        if tool is None:
+            # 模型幻觉出不存在的工具名，跳过并记录
+            results.append(f"工具 {tc['name']} 不存在，已跳过")
+            continue
         result = call_tool(tool, tc["args"])
         results.append(f"{tc['name']} 结果：{result}")
         tool_names.append(tc["name"])
-    trace.append(f"🔧 调用工具：{', '.join(tool_names)}")
+
+    duration = time.time() - start
+
+    # 所有工具都不存在 / 都失败了 → 退回检索分支，而不是带着空结果进生成
+    if not tool_names:
+        trace.append(f"🚫 路由判断：模型尝试调工具但均失败，退回检索 ⏱️ {duration:.1f}s")
+        return {"used_tool": False, "tool_result": "", "trace": trace}
+
+    trace.append(f"🔧 调用工具：{', '.join(tool_names)} ⏱️ {duration:.1f}s")
     return {"used_tool": True, "tool_result": "\n".join(results), "trace": trace}
 
 

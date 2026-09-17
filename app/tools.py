@@ -47,8 +47,10 @@ def _safe_eval(node: ast.AST):
 def calculator(expression: str) -> str:
     """计算一个算术表达式，例如 '123*456' 或 '(12+3)*4'。
     支持加减乘除、取余、幂和括号。参数 expression 是待计算的表达式字符串。"""
+    if not expression or not expression.strip():
+        return "计算出错：表达式不能为空"
     try:
-        tree = ast.parse(expression, mode="eval")
+        tree = ast.parse(expression.strip(), mode="eval")
         return str(_safe_eval(tree))
     except Exception as e:  # 语法错 / 白名单外的运算 / 除零，都安全兜底
         return f"计算出错：{e}"

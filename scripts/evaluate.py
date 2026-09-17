@@ -50,32 +50,46 @@ def main():
         print(f"\n问题：{item['question']}")
         for use_rerank in (True, False):
             label = "有rerank" if use_rerank else "无rerank"
-            result = ask(item["question"], use_rerank=use_rerank)
+            try:
+                result = ask(item["question"], use_rerank=use_rerank)
+            except Exception as e:
+                print(f"  [{label}] ⚠️ 提问失败，跳过：{e}")
+                continue
 
-            r1 = faithfulness.score(
-                user_input=item["question"],
-                response=result["answer"],
-                retrieved_contexts=result["context"],
-            )
-            r2 = answer_relevancy.score(
-                user_input=item["question"],
-                response=result["answer"],
-            )
-            r3 = context_precision.score(
-                user_input=item["question"],
-                reference=item["reference"],
-                retrieved_contexts=result["context"],
-            )
-            print(f"  [{label}] 忠实度={r1.value:.3f}  答案相关={r2.value:.3f}  上下文精度={r3.value:.3f}")
+            try:
+                r1 = faithfulness.score(
+                    user_input=item["question"],
+                    response=result["answer"],
+                    retrieved_contexts=result["context"],
+                )
+                r2 = answer_relevancy.score(
+                    user_input=item["question"],
+                    response=result["answer"],
+                    retrieved_contexts=result["context"],  # 补充上下文，让评测更准确
+                )
+                r3 = context_precision.score(
+                    user_input=item["question"],
+                    reference=item["reference"],
+                    retrieved_contexts=result["context"],
+                )
+                print(f"  [{label}] 忠实度={r1.value:.3f}  答案相关={r2.value:.3f}  上下文精度={r3.value:.3f}")
 
-            summary["faithfulness"][label].append(r1.value)
-            summary["answer_relevancy"][label].append(r2.value)
-            summary["context_precision"][label].append(r3.value)
+                summary["faithfulness"][label].append(r1.value)
+                summary["answer_relevancy"][label].append(r2.value)
+                summary["context_precision"][label].append(r3.value)
+            except Exception as e:
+                print(f"  [{label}] ⚠️ 评分失败，跳过：{e}")
+                continue
 
     print("\n===== 平均对比（有 rerank vs 无 rerank）=====")
     for name, cols in summary.items():
-        on = sum(cols["有rerank"]) / len(cols["有rerank"])
-        off = sum(cols["无rerank"]) / len(cols["无rerank"])
+        on_vals = cols["有rerank"]
+        off_vals = cols["无rerank"]
+        if not on_vals or not off_vals:
+            print(f"{name:18s}  数据不足，跳过")
+            continue
+        on = sum(on_vals) / len(on_vals)
+        off = sum(off_vals) / len(off_vals)
         print(f"{name:18s}  有rerank={on:.3f}  无rerank={off:.3f}  差={on - off:+.3f}")
 
 
